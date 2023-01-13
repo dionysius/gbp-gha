@@ -17,7 +17,7 @@ env:
 jobs:
 
   build-native:
-    name: build ${{ matrix.distro }} native
+    name: ${{ matrix.distro }} native
     runs-on: ubuntu-latest
 
     strategy:

@@ -18,7 +18,7 @@ jobs:
 
 # duplicate build jobs (native vs qemu) may be simpler in the future: https://github.com/uraimo/run-on-arch-action/issues/93
   build-qemu:
-    name: build ${{ matrix.distro }} ${{ matrix.arch }}
+    name: ${{ matrix.distro }} ${{ matrix.arch }}
     runs-on: ubuntu-latest
 
     strategy:
