@@ -1,0 +1,98 @@
+name: git-buildpackage native packaging
+
+on:
+  workflow_call:
+    # inputs:
+    #   DEBFULLNAME:
+    #     required: true
+    #     type: string
+    #   DEBEMAIL:
+    #     required: true
+    #     type: string
+
+env:
+  DEBFULLNAME: dionysius (github actions)
+  DEBEMAIL: "dragon.dionysius+gha@gmail.com"
+
+jobs:
+
+  build-native:
+    name: build ${{ matrix.distro }} native
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+          - container: "ubuntu:latest"
+            distro: "ubuntu_latest"
+          - container: "debian:latest"
+            distro: "debian_latest"
+
+    container:
+      image: ${{ matrix.container }}
+      env:
+        DEBIAN_FRONTEND: noninteractive
+
+    steps:
+      # because job is in container
+      - name: latest git from backports
+        # https://github.com/actions/runner/issues/1533
+        shell: bash
+        run: |
+          # https://github.com/actions/runner-images/issues/675
+          echo 'Acquire::Retries "3";' | tee /etc/apt/apt.conf.d/99ci
+
+          # add backports where missing and install latest git
+          # https://github.com/actions/checkout/issues/126
+          apt-get update
+          apt-get install -y lsb-release
+          DISTCODENAME=$(lsb_release -c -s)
+          grep -qE "^deb.*$DISTCODENAME-backports main" /etc/apt/sources.list || grep -E "^deb.*$DISTCODENAME main" /etc/apt/sources.list | sed "s/$DISTCODENAME main/$DISTCODENAME-backports main/" | tee -a /etc/apt/sources.list
+          apt-get update
+          apt-get -t $DISTCODENAME-backports install -y git
+      - name: check out
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          path: source
+      - name: install
+        # https://github.com/actions/runner/issues/1533
+        shell: bash
+        run: |
+          git config --global user.name "${DEBFULLNAME}"
+          git config --global user.email "${DEBEMAIL}"
+
+          apt-get install -y debhelper-compat git-buildpackage equivs
+      - name: build deb
+        # https://github.com/actions/runner/issues/1533
+        shell: bash
+        run: |
+          # install build depends and remove resulting clutter
+          mk-build-deps -i -r source/debian/control -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends --yes"
+          rm -f *.deb *.buildinfo *.changes
+
+          pushd source
+
+          ls -lah .
+
+          DISTCODENAME=$(lsb_release -c -s)
+          PARENTVERSION=$(dpkg-parsechangelog --show-field Version)
+          dch -b -D "${DISTCODENAME}" -v "${PARENTVERSION}~${DISTCODENAME}" "Release for ${DISTCODENAME}"
+          git add .
+          git commit -m "Update changelog for $(dpkg-parsechangelog --show-field Version) release"
+
+          gbp buildpackage -F -us -uc --git-export-dir=.. --git-ignore-branch
+
+          popd
+      - name: upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: results-${{ matrix.distro }}-native
+          retention-days: 1
+          path: |
+            *.buildinfo
+            *.changes
+            *.ddeb
+            *.deb
+            *.dsc
+            *.tar*
