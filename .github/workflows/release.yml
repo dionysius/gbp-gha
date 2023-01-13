@@ -7,8 +7,6 @@ on:
 jobs:
 
   release:
-    if: startsWith(github.event.ref, 'refs/tags/debian')
-    needs: [build-native, build-qemu]
     runs-on: ubuntu-latest
 
     steps:
