@@ -2,17 +2,20 @@ name: git-buildpackage qemu packaging
 
 on:
   workflow_call:
-    # inputs:
-    #   DEBFULLNAME:
-    #     required: true
-    #     type: string
-    #   DEBEMAIL:
-    #     required: true
-    #     type: string
+    secrets:
+      GPG_PRIVATE_KEY:
+        required: true
+    inputs:
+      DEBFULLNAME:
+        required: true
+        type: string
+      DEBEMAIL:
+        required: true
+        type: string
 
 env:
-  DEBFULLNAME: dionysius (github-actions)
-  DEBEMAIL: "dragon.dionysius+gha@gmail.com"
+  DEBFULLNAME: ${{ inputs.DEBFULLNAME }}
+  DEBEMAIL: ${{ inputs.DEBEMAIL }}
 
 jobs:
 
@@ -58,6 +61,7 @@ jobs:
           env: |
             DEBFULLNAME: "${{ env.DEBFULLNAME }}"
             DEBEMAIL: "${{ env.DEBEMAIL }}"
+            GPG_PRIVATE_KEY: "${{ secrets.GPG_PRIVATE_KEY }}"
           dockerRunArgs: |
             --volume "${PWD}:/work"
           install: |
@@ -73,7 +77,7 @@ jobs:
             apt-get update
             apt-get -t $DISTCODENAME-backports install -y git
 
-            apt-get install -y debhelper-compat git-buildpackage equivs
+            apt-get install -y debhelper-compat git-buildpackage equivs dpkg-sig
           run: |
             git config --global user.name "${DEBFULLNAME}"
             git config --global user.email "${DEBEMAIL}"
@@ -85,6 +89,8 @@ jobs:
             mk-build-deps -i -r source/debian/control -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends --yes"
             rm -f *.deb *.buildinfo *.changes
 
+            echo "$GPG_PRIVATE_KEY" | gpg --import
+
             pushd source
 
             ls -lah .
@@ -95,14 +101,17 @@ jobs:
             git add .
             git commit -m "Update changelog for $(dpkg-parsechangelog --show-field Version) release"
 
-            gbp buildpackage -B -us -uc --git-export-dir=.. --git-ignore-branch
+            gbp buildpackage -B --git-export-dir=.. --git-ignore-branch
 
             popd
+
+            dpkg-sig -s builder *.deb
+
             popd
       - name: upload artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: results-qemu
+          name: results-${{ matrix.distro }}-${{ matrix.arch }}
           retention-days: 1
           path: |
             *.buildinfo

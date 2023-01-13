@@ -2,17 +2,20 @@ name: git-buildpackage native packaging
 
 on:
   workflow_call:
-    # inputs:
-    #   DEBFULLNAME:
-    #     required: true
-    #     type: string
-    #   DEBEMAIL:
-    #     required: true
-    #     type: string
+    secrets:
+      GPG_PRIVATE_KEY:
+        required: true
+    inputs:
+      DEBFULLNAME:
+        required: true
+        type: string
+      DEBEMAIL:
+        required: true
+        type: string
 
 env:
-  DEBFULLNAME: dionysius (github-actions)
-  DEBEMAIL: "dragon.dionysius+gha@gmail.com"
+  DEBFULLNAME: ${{ inputs.DEBFULLNAME }}
+  DEBEMAIL: ${{ inputs.DEBEMAIL }}
 
 jobs:
 
@@ -62,7 +65,7 @@ jobs:
           git config --global user.name "${DEBFULLNAME}"
           git config --global user.email "${DEBEMAIL}"
 
-          apt-get install -y debhelper-compat git-buildpackage equivs
+          apt-get install -y debhelper-compat git-buildpackage equivs dpkg-sig
       - name: build deb
         # https://github.com/actions/runner/issues/1533
         shell: bash
@@ -70,6 +73,8 @@ jobs:
           # install build depends and remove resulting clutter
           mk-build-deps -i -r source/debian/control -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends --yes"
           rm -f *.deb *.buildinfo *.changes
+
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --import
 
           pushd source
 
@@ -81,9 +86,11 @@ jobs:
           git add .
           git commit -m "Update changelog for $(dpkg-parsechangelog --show-field Version) release"
 
-          gbp buildpackage -b -us -uc --git-export-dir=.. --git-ignore-branch
+          gbp buildpackage -F --git-export-dir=.. --git-ignore-branch
 
           popd
+
+          dpkg-sig -s builder *.deb
       - name: upload artifacts
         uses: actions/upload-artifact@v3
         with:
