@@ -11,7 +11,7 @@ on:
     #     type: string
 
 env:
-  DEBFULLNAME: dionysius (github actions)
+  DEBFULLNAME: dionysius (github-actions)
   DEBEMAIL: "dragon.dionysius+gha@gmail.com"
 
 jobs:
@@ -81,7 +81,7 @@ jobs:
           git add .
           git commit -m "Update changelog for $(dpkg-parsechangelog --show-field Version) release"
 
-          gbp buildpackage -F -us -uc --git-export-dir=.. --git-ignore-branch
+          gbp buildpackage -b -us -uc --git-export-dir=.. --git-ignore-branch
 
           popd
       - name: upload artifacts

@@ -11,7 +11,7 @@ on:
     #     type: string
 
 env:
-  DEBFULLNAME: dionysius (github actions)
+  DEBFULLNAME: dionysius (github-actions)
   DEBEMAIL: "dragon.dionysius+gha@gmail.com"
 
 jobs:

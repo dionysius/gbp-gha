@@ -31,5 +31,8 @@ jobs:
           draft: false
           fail_on_unmatched_files: true
           body_path: changelog
+          # to save space no deb, debian and orig files
           files: |
+            results-*/*.buildinfo
             results-*/*.changes
+            results-*/*.dsc
