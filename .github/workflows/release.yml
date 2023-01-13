@@ -24,6 +24,9 @@ jobs:
           pushd source
           dpkg-parsechangelog -S Changes | tail -n+4 > ../changelog
           popd
+      - name: only one orig
+        run: |
+          find . -name "*.orig.tar.gz" | tail -n +2 | xargs rm
       - name: release
         uses: softprops/action-gh-release@v1
         with:
