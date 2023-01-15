@@ -32,16 +32,20 @@ jobs:
         # https://github.com/uraimo/run-on-arch-action/issues/106
         # https://github.com/uraimo/run-on-arch-action/pull/58
         include:
-          - arch: armv7
-            distro: ubuntu_latest
+          # avoid 32bit for now:
+          # https://github.com/rust-lang/cargo/issues/8719
+          # - arch: armv7
+          #   distro: ubuntu_latest
+          # - arch: armv7
+          #   distro: bullseye
           - arch: aarch64
             distro: ubuntu_latest
           - arch: riscv64
             distro: ubuntu_latest
-          - arch: armv7
-            distro: bullseye
           - arch: aarch64
             distro: bullseye
+          # not available yet
+          # https://github.com/uraimo/run-on-arch-action/issues/28
           # - arch: riscv64
           #   distro: bullseye
 
