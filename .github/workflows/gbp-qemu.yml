@@ -98,8 +98,6 @@ jobs:
 
             pushd source
 
-            ls -lah .
-
             DISTCODENAME=$(lsb_release -c -s)
             PARENTVERSION=$(dpkg-parsechangelog --show-field Version)
             dch -b -D "${DISTCODENAME}" -v "${PARENTVERSION}~${DISTCODENAME}" "Release for ${DISTCODENAME}"
