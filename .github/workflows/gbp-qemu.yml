@@ -3,7 +3,7 @@ name: git-buildpackage qemu packaging
 on:
   workflow_call:
     secrets:
-      GPG_PRIVATE_KEY:
+      GPG_PRIVATE_KEY_BASE64:
         required: true
     inputs:
       DEBFULLNAME:
@@ -11,8 +11,6 @@ on:
         type: string
       DEBEMAIL:
         required: true
-        type: string
-      before_build_deps_install:
         type: string
 
 env:
@@ -51,9 +49,6 @@ jobs:
         with:
           fetch-depth: 0
           path: source
-      - name: debug
-        run: |
-          echo $DEBFULLNAME $DEBEMAIL
       - name: build deb
         uses: uraimo/run-on-arch-action@v2
         with:
@@ -63,8 +58,7 @@ jobs:
           env: |
             DEBFULLNAME: "${{ env.DEBFULLNAME }}"
             DEBEMAIL: "${{ env.DEBEMAIL }}"
-            GPG_PRIVATE_KEY: "${{ secrets.GPG_PRIVATE_KEY }}"
-            before_build_deps_install: "${{ inputs.before_build_deps_install }}"
+            GPG_PRIVATE_KEY_BASE64: "${{ secrets.GPG_PRIVATE_KEY_BASE64 }}"
           dockerRunArgs: |
             --volume "${PWD}:/work"
           install: |
@@ -94,7 +88,7 @@ jobs:
             mk-build-deps -i -r source/debian/control -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends --yes"
             rm -f *.deb *.buildinfo *.changes
 
-            echo "$GPG_PRIVATE_KEY" | gpg --import
+            echo -n "$GPG_PRIVATE_KEY_BASE64" | base64 -d | gpg --import
 
             pushd source
 
