@@ -12,6 +12,8 @@ on:
       DEBEMAIL:
         required: true
         type: string
+      before_build_deps_install:
+        type: string
 
 env:
   DEBFULLNAME: ${{ inputs.DEBFULLNAME }}
@@ -70,6 +72,8 @@ jobs:
         # https://github.com/actions/runner/issues/1533
         shell: bash
         run: |
+          ${{ input.before_build_deps }}
+
           # install build depends and remove resulting clutter
           mk-build-deps -i -r source/debian/control -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends --yes"
           rm -f *.deb *.buildinfo *.changes

@@ -12,6 +12,8 @@ on:
       DEBEMAIL:
         required: true
         type: string
+      before_build_deps_install:
+        type: string
 
 env:
   DEBFULLNAME: ${{ inputs.DEBFULLNAME }}
@@ -62,6 +64,7 @@ jobs:
             DEBFULLNAME: "${{ env.DEBFULLNAME }}"
             DEBEMAIL: "${{ env.DEBEMAIL }}"
             GPG_PRIVATE_KEY: "${{ secrets.GPG_PRIVATE_KEY }}"
+            before_build_deps_install: "${{ input.before_build_deps_install }}"
           dockerRunArgs: |
             --volume "${PWD}:/work"
           install: |
@@ -84,6 +87,8 @@ jobs:
             git config --global --add safe.directory /work/source
 
             pushd /work
+
+            $before_build_deps_install
 
             # install build depends and remove resulting clutter
             mk-build-deps -i -r source/debian/control -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends --yes"
