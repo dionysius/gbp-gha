@@ -64,7 +64,7 @@ jobs:
             DEBFULLNAME: "${{ env.DEBFULLNAME }}"
             DEBEMAIL: "${{ env.DEBEMAIL }}"
             GPG_PRIVATE_KEY: "${{ secrets.GPG_PRIVATE_KEY }}"
-            before_build_deps_install: "${{ input.before_build_deps_install }}"
+            before_build_deps_install: "${{ inputs.before_build_deps_install }}"
           dockerRunArgs: |
             --volume "${PWD}:/work"
           install: |
