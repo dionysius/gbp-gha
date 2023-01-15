@@ -72,7 +72,7 @@ jobs:
         # https://github.com/actions/runner/issues/1533
         shell: bash
         run: |
-          ${{ inputs.before_build_deps }}
+          ${{ inputs.before_build_deps_install }}
 
           # install build depends and remove resulting clutter
           mk-build-deps -i -r source/debian/control -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends --yes"
