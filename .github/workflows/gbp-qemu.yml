@@ -3,7 +3,7 @@ name: git-buildpackage qemu packaging
 on:
   workflow_call:
     secrets:
-      GPG_PRIVATE_KEY_BASE64:
+      GPG_PRIVATE_KEY:
         required: true
     inputs:
       DEBFULLNAME:
@@ -11,6 +11,8 @@ on:
         type: string
       DEBEMAIL:
         required: true
+        type: string
+      before_build_deps_install:
         type: string
 
 env:
@@ -49,6 +51,10 @@ jobs:
         with:
           fetch-depth: 0
           path: source
+      - name: place files
+        run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" > signing-key.priv
+          echo "${{ inputs.before_build_deps_install }}" > before_build_deps_install.sh
       - name: build deb
         uses: uraimo/run-on-arch-action@v2
         with:
@@ -58,7 +64,6 @@ jobs:
           env: |
             DEBFULLNAME: "${{ env.DEBFULLNAME }}"
             DEBEMAIL: "${{ env.DEBEMAIL }}"
-            GPG_PRIVATE_KEY_BASE64: "${{ secrets.GPG_PRIVATE_KEY_BASE64 }}"
           dockerRunArgs: |
             --volume "${PWD}:/work"
           install: |
@@ -82,17 +87,20 @@ jobs:
 
             pushd /work
 
-            $before_build_deps_install
+            gpg --import signing-key.priv
+            rm signing-key.priv
+
+            DISTCODENAME=$(lsb_release -c -s)
+
+            bash before_build_deps_install.sh
+            rm before_build_deps_install.sh
 
             # install build depends and remove resulting clutter
             mk-build-deps -i -r source/debian/control -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends --yes"
             rm -f *.deb *.buildinfo *.changes
 
-            echo -n "$GPG_PRIVATE_KEY_BASE64" | base64 -d | gpg --import
-
             pushd source
 
-            DISTCODENAME=$(lsb_release -c -s)
             PARENTVERSION=$(dpkg-parsechangelog --show-field Version)
             dch -b -D "${DISTCODENAME}" -v "${PARENTVERSION}~${DISTCODENAME}" "Release for ${DISTCODENAME}"
             git add .

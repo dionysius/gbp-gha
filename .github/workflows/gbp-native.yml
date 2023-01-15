@@ -72,17 +72,18 @@ jobs:
         # https://github.com/actions/runner/issues/1533
         shell: bash
         run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --import
+
+          DISTCODENAME=$(lsb_release -c -s)
+
           ${{ inputs.before_build_deps_install }}
 
           # install build depends and remove resulting clutter
           mk-build-deps -i -r source/debian/control -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends --yes"
           rm -f *.deb *.buildinfo *.changes
 
-          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --import
-
           pushd source
 
-          DISTCODENAME=$(lsb_release -c -s)
           PARENTVERSION=$(dpkg-parsechangelog --show-field Version)
           dch -b -D "${DISTCODENAME}" -v "${PARENTVERSION}~${DISTCODENAME}" "Release for ${DISTCODENAME}"
           git add .
