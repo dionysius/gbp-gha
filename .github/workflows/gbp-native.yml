@@ -67,7 +67,7 @@ jobs:
           git config --global user.name "${DEBFULLNAME}"
           git config --global user.email "${DEBEMAIL}"
 
-          apt-get install -y debhelper-compat git-buildpackage equivs dpkg-sig
+          apt-get install -y debhelper-compat git-buildpackage equivs
       - name: build deb
         # https://github.com/actions/runner/issues/1533
         shell: bash
@@ -92,8 +92,6 @@ jobs:
           gbp buildpackage -F --git-export-dir=.. --git-ignore-branch
 
           popd
-
-          dpkg-sig -s builder *.deb
       - name: upload artifacts
         uses: actions/upload-artifact@v3
         with:

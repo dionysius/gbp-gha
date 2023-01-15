@@ -85,7 +85,7 @@ jobs:
             apt-get update
             apt-get -t $DISTCODENAME-backports install -y git
 
-            apt-get install -y debhelper-compat git-buildpackage equivs dpkg-sig
+            apt-get install -y debhelper-compat git-buildpackage equivs
           run: |
             git config --global user.name "${DEBFULLNAME}"
             git config --global user.email "${DEBEMAIL}"
@@ -115,8 +115,6 @@ jobs:
             gbp buildpackage -B --git-export-dir=.. --git-ignore-branch
 
             popd
-
-            dpkg-sig -s builder *.deb
 
             popd
       - name: upload artifacts
