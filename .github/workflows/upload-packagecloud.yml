@@ -32,6 +32,7 @@ jobs:
       - name: upload
         run: |
           for resultdir in $(ls -d results-${{ matrix.vendor }}*); do
-            dist=$(grep -oP "Distribution: \K\w+" $resultdir/*.changes)
-            find $resultdir \( -name "*.deb" -o -name "*.dsc" \) | xargs -r package_cloud push ${{ inputs.USERREPO }}/${{ matrix.vendor }}/$dist
+            dist=$(grep -oP "Distribution: \K\w+" $resultdir/*.changes | head -n1)
+            package_cloud push ${{ inputs.USERREPO }}/${{ matrix.vendor }}/$dist $resultdir/*.deb
+            package_cloud push ${{ inputs.USERREPO }}/${{ matrix.vendor }}/$dist $resultdir/*.dsc
           done
