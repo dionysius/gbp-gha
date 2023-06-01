@@ -27,7 +27,7 @@ jobs:
         uses: actions/download-artifact@v3
       - name: install
         run: |
-          gem install package_cloud
+          sudo gem install package_cloud
           echo "PACKAGECLOUD_TOKEN=${{ secrets.PACKAGECLOUD_TOKEN }}" >> $GITHUB_ENV
       - name: upload
         run: |
