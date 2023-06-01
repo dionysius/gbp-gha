@@ -13,16 +13,14 @@ on:
 jobs:
 
   upload-packagecloud:
-    name: ${{ matrix.distro }} upload
+    name: ${{ matrix.vendor }} upload
     runs-on: ubuntu-latest
 
     strategy:
       matrix:
         include:
-          - distro: "ubuntu_latest"
-            upload: ubuntu/jammy
-          - distro: "debian_latest"
-            upload: debian/bullseye
+          - vendor: "ubuntu"
+          - vendor: "debian"
 
     steps:
       - name: download artifacts
@@ -33,4 +31,7 @@ jobs:
           echo "PACKAGECLOUD_TOKEN=${{ secrets.PACKAGECLOUD_TOKEN }}" >> $GITHUB_ENV
       - name: upload
         run: |
-          find results-${{ matrix.distro }}-* \( -name "*.deb" -o -name "*.dsc" \) | xargs -r package_cloud push ${{ inputs.USERREPO }}/${{ matrix.upload }}
+          for resultdir in $(ls -d results-${{ matrix.vendor }}*); do
+            dist=$(grep -oP "Distribution: \K\w+" $resultdir/*.changes)
+            find $resultdir \( -name "*.deb" -o -name "*.dsc" \) | xargs -r package_cloud push ${{ inputs.USERREPO }}/${{ matrix.vendor }}/$dist
+          done
