@@ -33,6 +33,6 @@ jobs:
         run: |
           for resultdir in $(ls -d results-${{ matrix.vendor }}*); do
             dist=$(grep -oP "Distribution: \K\w+" $resultdir/*.changes | head -n1)
-            package_cloud push ${{ inputs.USERREPO }}/${{ matrix.vendor }}/$dist $resultdir/*.deb
-            package_cloud push ${{ inputs.USERREPO }}/${{ matrix.vendor }}/$dist $resultdir/*.dsc
+            find $resultdir -name "*.deb" -not -name "*-dbgsym" -print | xargs -r package_cloud push ${{ inputs.USERREPO }}/${{ matrix.vendor }}/$dist
+            find $resultdir -name "*.dsc" -print | xargs -r package_cloud push ${{ inputs.USERREPO }}/${{ matrix.vendor }}/$dist
           done
