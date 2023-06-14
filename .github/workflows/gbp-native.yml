@@ -59,7 +59,7 @@ jobs:
             sed -i -E "s/^(Suites:.* $DISTCODENAME( |$))/\1 $DISTCODENAME-backports /g" /etc/apt/sources.list.d/debian.sources
           fi
           apt-get update
-          apt-get -t $DISTCODENAME-backports install -y git
+          apt-get -t $DISTCODENAME-backports install -y git || apt-get install -y git
       - name: check out
         uses: actions/checkout@v3
         with:
