@@ -51,8 +51,13 @@ jobs:
           # https://github.com/actions/checkout/issues/126
           apt-get update
           apt-get install -y lsb-release
-          DISTCODENAME=$(lsb_release -c -s)
-          grep -qE "^deb.*$DISTCODENAME-backports main" /etc/apt/sources.list || grep -E "^deb.*$DISTCODENAME main" /etc/apt/sources.list | sed "s/$DISTCODENAME main/$DISTCODENAME-backports main/" | tee -a /etc/apt/sources.list
+          DISTCODENAME=$(lsb_release -c -s 2>/dev/null)
+          if [ -s /etc/apt/sources.list ]; then
+            grep -qE "^deb.*$DISTCODENAME-backports main" /etc/apt/sources.list || grep -E "^deb.*$DISTCODENAME main" /etc/apt/sources.list | sed "s/$DISTCODENAME main/$DISTCODENAME-backports main/" | tee -a /etc/apt/sources.list
+          fi
+          if [ -s /etc/apt/sources.list.d/debian.sources ]; then
+            sed -i -E "s/^(Suites:.* $DISTCODENAME( |$))/\1 $DISTCODENAME-backports /g" /etc/apt/sources.list.d/debian.sources
+          fi
           apt-get update
           apt-get -t $DISTCODENAME-backports install -y git
       - name: check out
