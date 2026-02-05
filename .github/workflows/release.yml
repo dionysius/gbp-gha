@@ -2,7 +2,19 @@ name: create release with artifacts
 
 on:
   workflow_call:
-#     inputs:
+    inputs:
+      draft:
+        description: 'Create release as draft'
+        type: boolean
+        default: true
+      prerelease:
+        description: 'Mark release as pre-release'
+        type: boolean
+        default: false
+      publish:
+        description: 'Publish release (set draft to false after creation)'
+        type: boolean
+        default: false
 
 jobs:
 
@@ -11,12 +23,12 @@ jobs:
 
     steps:
       - name: check out
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
           path: source
       - name: download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
       - name: prepare changelog
         run: |
           sudo apt-get update
@@ -26,18 +38,18 @@ jobs:
           popd
       - name: only one orig
         run: |
-          find . -name "*.orig.tar.gz" | tail -n +2 | xargs -r rm
-      - name: release
-        uses: softprops/action-gh-release@v1
+          find . -name "*.orig.tar.gz" | sort | tail -n +2 | xargs -r rm
+      - name: create draft release with assets
+        uses: softprops/action-gh-release@v2
         with:
-          prerelease: false
-          draft: false
+          draft: true
           fail_on_unmatched_files: true
           body_path: changelog
           files: |
-            results-*/*
-          # # to save space no deb, debian and orig files
-          # files: |
-          #   results-*/*.buildinfo
-          #   results-*/*.changes
-          #   results-*/*.dsc
+            results_*/*
+      - name: publish release
+        if: ${{ inputs.publish }}
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: ${{ inputs.prerelease }}

@@ -14,6 +14,14 @@ on:
         type: string
       before_build_deps_install:
         type: string
+      distros:
+        description: 'JSON array of distro container images to build for (e.g. ["ubuntu:latest", "debian:stable"]).'
+        type: string
+        default: '["ubuntu:latest", "debian:stable"]'
+      architectures:
+        description: 'JSON array of architectures to build for (any of ["amd64", "arm64"]).'
+        type: string
+        default: '["amd64"]'
 
 env:
   DEBFULLNAME: ${{ inputs.DEBFULLNAME }}
@@ -21,17 +29,104 @@ env:
 
 jobs:
 
-  build-native:
-    name: ${{ matrix.distro }} native
+  prepare-matrix:
+    name: Prepare build matrix
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.generate-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Generate matrix
+        id: generate-matrix
+        run: |
+          # Parse inputs and create combined matrix
+          DISTROS='${{ inputs.distros }}'
+          ARCHES='${{ inputs.architectures }}'
+
+          # Normalize distros to objects with container and distro keys
+          DISTROS_NORMALIZED=$(echo "$DISTROS" | jq -c 'map(
+            if type == "string" then 
+              {container: ., distro: (. | gsub("[:/]"; "-"))}
+            elif has("distro") then .
+            else . + {distro: (.container | gsub("[:/]"; "-"))}
+            end
+          )')
+
+          # Normalize architectures to objects with arch and runner keys
+          # GitHub runners: ubuntu-latest (x64), ubuntu-24.04-arm (ARM)
+          ARCHES_NORMALIZED=$(echo "$ARCHES" | jq -c 'map(
+            if . == "arm64" or . == "armhf" or . == "armv7" then 
+              {arch: ., runner: "ubuntu-24.04-arm"}
+            else 
+              {arch: ., runner: "ubuntu-24.04"}
+            end
+          )')
+
+          # Check if there are any architecture-dependent packages
+          # If any Architecture field is not "all", there are arch-dependent packages
+          HAS_ARCH_PACKAGES=false
+          if grep -E '^Architecture:' debian/control 2>/dev/null | grep -qvE ':\s*all\s*$'; then
+            HAS_ARCH_PACKAGES=true
+          fi
+
+          # Deduplicate distros by digest, then expand with architectures
+          MATRIX=$(echo "$DISTROS_NORMALIZED" | jq -r '.[] | @json' | while IFS= read -r distro_item; do
+            container=$(echo "$distro_item" | jq -r '.container')
+            distro=$(echo "$distro_item" | jq -r '.distro')
+            
+            # Get digest for the container image
+            digest=$(docker buildx imagetools inspect "$container" --format '{{.Manifest.Digest}}')
+            
+            echo "$distro_item" | jq -c --arg digest "$digest" '. + {digest: $digest}'
+          done | jq -sc --argjson arches "$ARCHES_NORMALIZED" --argjson has_arch "$HAS_ARCH_PACKAGES" '
+            # Deduplicate distros by digest
+            reduce .[] as $distro (
+              {seen: {}, distros: []};
+              if .seen[$distro.digest] then
+                .  # Skip duplicate distro
+              else
+                .seen[$distro.digest] = true |
+                .distros += [$distro]
+              end
+            ) |
+            # Expand each unique distro with architectures
+            .distros |
+            map(
+              . as $d |
+              if $has_arch then
+                # Include all architectures
+                $arches | to_entries | map(
+                  {
+                    container: $d.container,
+                    distro: $d.distro,
+                    arch: .value.arch,
+                    runner: .value.runner,
+                    is_primary: (.key == 0)  # First arch is primary
+                  }
+                )
+              else
+                # Only include first architecture
+                [{
+                  container: $d.container,
+                  distro: $d.distro,
+                  arch: $arches[0].arch,
+                  runner: $arches[0].runner,
+                  is_primary: true
+                }]
+              end
+            ) | flatten | {include: .}
+          ')
+
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+  build-native:
+    name: ${{ matrix.distro }} (${{ matrix.arch }})
+    needs: prepare-matrix
+    runs-on: ${{ matrix.runner }}
 
     strategy:
-      matrix:
-        include:
-          - container: "ubuntu:latest"
-            distro: "ubuntu_latest"
-          - container: "debian:latest"
-            distro: "debian_latest"
+      matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
 
     container:
       image: ${{ matrix.container }}
@@ -47,11 +142,11 @@ jobs:
           # https://github.com/actions/runner-images/issues/675
           echo 'Acquire::Retries "3";' | tee /etc/apt/apt.conf.d/99ci
 
-          # install lsb-release and git
+          # install git
           apt-get update
-          apt-get install -y lsb-release git
+          apt-get install -y git
       - name: check out
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           path: source
@@ -69,7 +164,7 @@ jobs:
         run: |
           echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --import
 
-          DISTCODENAME=$(lsb_release -c -s)
+          . /etc/os-release
 
           ${{ inputs.before_build_deps_install }}
 
@@ -80,17 +175,22 @@ jobs:
           pushd source
 
           PARENTVERSION=$(dpkg-parsechangelog --show-field Version)
-          dch -b -D "${DISTCODENAME}" -v "${PARENTVERSION}~${DISTCODENAME}" "Release for ${DISTCODENAME}"
+          dch -b -D "${VERSION_CODENAME}" -v "${PARENTVERSION}~${VERSION_CODENAME}" "Release for ${VERSION_CODENAME}"
           git add .
           git commit -m "Update changelog for $(dpkg-parsechangelog --show-field Version) release"
 
-          gbp buildpackage -F --git-export-dir=.. --git-ignore-branch
+          # Primary architecture: full build (source + all binaries), secondaries: binary-arch only (no _all packages)
+          if [ "${{ matrix.is_primary }}" = "true" ]; then
+            gbp buildpackage -F --git-export-dir=.. --git-ignore-branch
+          else
+            gbp buildpackage -B --git-export-dir=.. --git-ignore-branch
+          fi
 
           popd
       - name: upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: results-${{ matrix.distro }}-native
+          name: results_${{ matrix.distro }}_${{ matrix.arch }}
           retention-days: 1
           path: |
             *.buildinfo
