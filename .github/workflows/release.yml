@@ -3,10 +3,6 @@ name: create release with artifacts
 on:
   workflow_call:
     inputs:
-      draft:
-        description: 'Create release as draft'
-        type: boolean
-        default: true
       prerelease:
         description: 'Mark release as pre-release'
         type: boolean
@@ -15,6 +11,11 @@ on:
         description: 'Publish release (set draft to false after creation)'
         type: boolean
         default: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
 
 jobs:
 
@@ -39,6 +40,10 @@ jobs:
       - name: only one orig
         run: |
           find . -name "*.orig.tar.gz" | sort | tail -n +2 | xargs -r rm
+      - name: generate artifact attestations
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: 'results_*/*'
       - name: create draft release with assets
         uses: softprops/action-gh-release@v2
         with:

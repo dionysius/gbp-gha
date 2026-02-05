@@ -105,18 +105,16 @@ jobs:
     needs: build
     uses: dionysius/gbp-gha/.github/workflows/release.yml@main
     with:
-      draft: true
       prerelease: false
       publish: false
 ```
 
 #### Release Inputs
 
-- **`draft`** (optional): Create release as draft (default: `true`)
 - **`prerelease`** (optional): Mark release as pre-release (default: `false`)
 - **`publish`** (optional): Immediately publish the release (default: `false`)
-  - When `true`, overrides `draft` to publish immediately
-  - When `false`, respects the `draft` setting
+  - When `true`, publishes the release immediately
+  - When `false`, creates a draft release for manual review
 
 #### Release Strategy
 
@@ -126,7 +124,6 @@ The workflow supports different release strategies:
 
    ```yaml
    with:
-     draft: true
      publish: false
    ```
 
@@ -180,7 +177,6 @@ jobs:
     needs: build
     uses: dionysius/gbp-gha/.github/workflows/release.yml@main
     with:
-      draft: true
       prerelease: false
       publish: false
 ```
