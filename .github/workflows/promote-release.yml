@@ -1,0 +1,123 @@
+name: promote release
+
+on:
+  workflow_call:
+    inputs:
+      after_days:
+        description: 'Number of days to wait after first publish of a pattern match'
+        type: number
+        default: 7
+      release_pattern:
+        description: 'Glob-style pattern with capture group to match and group releases, use {*} to mark the version prefix for grouping (can include literal text)'
+        type: string
+        default: '{debian/*.*}.*'
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Promote releases
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const afterDays = ${{ inputs.after_days }};
+            const globPattern = '${{ inputs.release_pattern }}';
+            const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
+            // Convert glob pattern with capture group to regex
+            // Pattern format: prefix{capture}suffix where {*.*} marks what to capture
+            function globToRegex(pattern) {
+              // Find the capture group marked with {...}
+              const captureMatch = pattern.match(/\{([^}]+)\}/);
+              if (!captureMatch) {
+                throw new Error('Pattern must contain a capture group marked with {...}');
+              }
+
+              const captureContent = captureMatch[1];
+              const beforeCapture = pattern.substring(0, captureMatch.index);
+              const afterCapture = pattern.substring(captureMatch.index + captureMatch[0].length);
+
+              // Convert glob wildcards to regex
+              const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              // * matches a segment (any characters except / and .)
+              const globToRegexPart = (str) => escapeRegex(str).replace(/\\\*/g, '[^/.]+');
+
+              // Build regex: capture ONLY what's inside {...}
+              // So */{*.*}.* captures just "1.2", while {*/*.*}.* captures "debian/1.2"
+              const beforeRegex = globToRegexPart(beforeCapture);
+              const captureRegex = globToRegexPart(captureContent);
+              const afterRegex = afterCapture ? globToRegexPart(afterCapture) : '.*';
+
+              return new RegExp(`^${beforeRegex}(${captureRegex})${afterRegex}$`);
+            }
+
+            const releasePattern = globToRegex(globPattern);
+            console.log(`Pattern: ${globPattern} -> RegEx: ${releasePattern}`);
+
+            // If running in tag context, verify it matches the pattern
+            if (context.ref_type === 'tag') {
+              const match = context.ref_name.match(releasePattern);
+              if (!match || !match[1]) {
+                // not matching tag, nothing to promote
+                return;
+              }
+            }
+
+            // Get all releases
+            const allReleases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+
+            // Filter to only releases matching the pattern
+            const matchingReleases = allReleases.filter(r => r.tag_name.match(releasePattern)?.[1]);
+
+            // Process all matching prereleases, or only the one matching current tag
+            const releasesToProcess = matchingReleases.filter(r => 
+              r.prerelease && 
+              (context.ref_type !== 'tag' || r.tag_name === context.ref_name)
+            );
+
+            // Process wished releases
+            for (const release of releasesToProcess) {
+              const tag = release.tag_name;
+
+              // Extract version prefix from first capture group
+              const versionPrefix = tag.match(releasePattern)[1];
+
+              console.log(`Processing prerelease: ${tag} (version prefix: ${versionPrefix})`);
+
+              // Find the first release for this version prefix by comparing captures
+              const releasesForPrefix = matchingReleases
+                .filter(r => r.tag_name.match(releasePattern)[1] === versionPrefix)
+                .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
+              const firstReleaseDate = new Date(releasesForPrefix[0].created_at);
+              const currentDate = new Date();
+
+              // Calculate days elapsed based on calendar days, ignoring time of day
+              const firstDay = new Date(firstReleaseDate.toDateString());
+              const currentDay = new Date(currentDate.toDateString());
+              const daysElapsed = Math.floor((currentDay - firstDay) / MS_PER_DAY);
+
+              console.log(`First release for ${versionPrefix}: ${firstReleaseDate.toISOString()}`);
+              console.log(`Days elapsed: ${daysElapsed} (waiting period: ${afterDays} days)`);
+
+              // Check if waiting period has passed
+              if (daysElapsed >= afterDays) {
+                console.log(`Promoting ${tag} to full release (waited ${daysElapsed} days)`);
+                await github.rest.repos.updateRelease({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  release_id: release.id,
+                  prerelease: false
+                });
+              } else {
+                const daysRemaining = afterDays - daysElapsed;
+                console.log(`Not yet promoting ${tag} (need to wait ${daysRemaining} more days)`);
+              }
+            }

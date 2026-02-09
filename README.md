@@ -12,7 +12,7 @@ Builds Debian packages natively on specified distributions and architectures.
 
 - **Multi-distribution support**: Build on Debian, Ubuntu, or any Debian-based distro
 - **Multi-architecture support**: Native builds on x64 (amd64) and ARM (arm64) using GitHub's runners
-- **Configurable matrix**: Callers can specify custom combinations of distros and architectures
+- **Configurable matrix**: Callers can specify custom combinations of images and architectures
 - **GPG signing**: Automatically signs packages with provided GPG key
 - **Artifact upload**: Uploads built packages as workflow artifacts
 
@@ -34,7 +34,7 @@ jobs:
 - **`DEBFULLNAME`** (required): Full name for Debian changelog
 - **`DEBEMAIL`** (required): Email for Debian changelog
 - **`before_build_deps_install`** (optional): Shell commands to run before installing build dependencies
-- **`distros`** (optional): JSON array of container images to build for
+- **`images`** (optional): JSON array of container images to build for
   - Default: `["ubuntu:latest", "debian:stable"]`
   - Can be simple strings (container names) or objects with `container` and optional `distro` keys
   - Example: `["ubuntu:24.04", "debian:12"]`
@@ -50,7 +50,7 @@ jobs:
 
 #### Example: Custom Matrix
 
-Build on multiple distros and architectures:
+Build on multiple images and architectures:
 
 ```yaml
 jobs:
@@ -61,7 +61,7 @@ jobs:
     with:
       DEBFULLNAME: "Your Name"
       DEBEMAIL: "your.email@example.com"
-      distros: |
+      images: |
         [
           "ubuntu:24.04",
           "ubuntu:22.04",
@@ -75,7 +75,7 @@ jobs:
         ]
 ```
 
-This will create 8 build jobs (4 distros × 2 architectures).
+This will create 8 build jobs (4 images × 2 architectures).
 
 ### `release.yml` - Create GitHub Release
 
@@ -148,6 +148,78 @@ The workflow supports different release strategies:
 
    Publishes as a pre-release immediately.
 
+### `promote-release.yml` - Promote Releases After Waiting Period
+
+Promotes prereleases to full releases after a specified waiting period based on configurable grouping patterns.
+
+#### Promotion Logic
+
+The promotion workflow implements a staged release approach:
+
+1. **Pattern-based grouping**: Releases are grouped based on the captured portion of the pattern (e.g., with pattern `debian/{*.*}.*`, releases like `debian/1.2.0` and `debian/1.2.1` both group by `1.2`)
+2. **First release starts the clock**: The first release in a version group marks the starting day
+3. **Waiting period**: All prereleases in that group wait for the specified number of days
+4. **Automatic promotion**: After the waiting period, eligible prereleases are promoted to full releases
+
+**Calendar day calculation**: Days are calculated based on calendar dates (midnight to midnight), ignoring the time of day. This ensures consistent behavior regardless of when the workflow runs during the day.
+
+**Context-aware processing**:
+
+- When called from a **tag context** (e.g., from a release trigger), only that specific tag is checked for promotion
+- When called from a **branch context** (e.g., scheduled or manual trigger), all matching releases are processed
+
+This allows time for bug fixes and testing while ensuring all releases eventually become fully published.
+
+#### Promotion Usage
+
+**As a reusable workflow** (call on-demand from your workflow):
+
+```yaml
+jobs:
+  promote:
+    uses: dionysius/gbp-gha/.github/workflows/promote-release.yml@main
+    with:
+      after_days: 7
+      release_pattern: 'debian/{*.*}.*'
+```
+
+**With automatic daily scheduling** (create this in your repository):
+
+```yaml
+# In your repo: .github/workflows/promote-daily.yml
+name: Daily Release Promotion
+
+on:
+  schedule:
+    - cron: '0 3 * * *'  # Daily at 03:00 UTC
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  promote:
+    uses: dionysius/gbp-gha/.github/workflows/promote-release.yml@main
+    with:
+      after_days: 7
+      release_pattern: 'debian/{*.*}.*'
+```
+
+#### Promotion Inputs
+
+- **`after_days`** (optional): Number of days to wait after the first minor release before promotion (default: `7`)
+- **`release_pattern`** (optional): Glob-style pattern to match and group releases (default: `'{debian/*.*}.*'`)
+  - Use `{...}` to mark the captured portion that defines the version group
+  - The captured group determines which releases share the same waiting period
+  - Use `*` as a wildcard to match a single segment (excludes `/` and `.` characters)
+  - Example patterns and grouping behavior:
+    - `debian/{*.*}.*` matches `debian/1.2.0`, `debian/1.2.1`, groups by `1.2`
+      - All debian releases with same minor version share one waiting period
+    - `{debian/*.*}.*` matches `debian/1.2.0`, groups by `debian/1.2` (equivalent to above)
+    - `*/{*.*}.*` matches `debian/1.2.0` and `test/1.2.0`, both group by `1.2`
+      - All distros with same version **share one waiting period** (cross-distro grouping)
+    - `{*/*.*}.*` matches `debian/1.2.0` and `test/1.2.0`, groups by `debian/1.2` and `test/1.2`
+      - Each distro has **independent waiting periods** (separate grouping)
+    - `v{*.*}.*` matches `v1.2.0`, `v1.2.1`, groups by `1.2`
+    - `{*}.*.*` matches `1.0.0`, `1.1.0`, groups by `1` (major version only)
+
 ## Complete Example
 
 ```yaml
@@ -170,15 +242,22 @@ jobs:
     with:
       DEBFULLNAME: "Your Name"
       DEBEMAIL: "your.email@example.com"
-      distros: ["ubuntu:latest", "debian:stable"]
+      images: ["ubuntu:latest", "debian:stable"]
       architectures: ["amd64", "arm64"]
 
   release:
     needs: build
     uses: dionysius/gbp-gha/.github/workflows/release.yml@main
     with:
-      prerelease: false
-      publish: false
+      prerelease: true
+      publish: true
+
+  # Optional: Promote immediately if enough time has passed
+  promote:
+    needs: release
+    uses: dionysius/gbp-gha/.github/workflows/promote-release.yml@main
+    with:
+      after_days: 7
 ```
 
 ## Notes
