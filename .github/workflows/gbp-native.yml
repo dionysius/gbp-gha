@@ -14,7 +14,7 @@ on:
         type: string
       before_build_deps_install:
         type: string
-      distros:
+      images:
         description: 'JSON array of distro container images to build for (e.g. ["ubuntu:latest", "debian:stable"]).'
         type: string
         default: '["ubuntu:latest", "debian:stable"]'
@@ -41,15 +41,15 @@ jobs:
         id: generate-matrix
         run: |
           # Parse inputs and create combined matrix
-          DISTROS='${{ inputs.distros }}'
+          IMAGES='${{ inputs.images }}'
           ARCHES='${{ inputs.architectures }}'
 
-          # Normalize distros to objects with container and distro keys
-          DISTROS_NORMALIZED=$(echo "$DISTROS" | jq -c 'map(
+          # Normalize images to objects with image and distro keys
+          IMAGES_NORMALIZED=$(echo "$IMAGES" | jq -c 'map(
             if type == "string" then 
-              {container: ., distro: (. | gsub("[:/]"; "-"))}
+              {image: ., distro: (. | gsub("[:/]"; "-"))}
             elif has("distro") then .
-            else . + {distro: (.container | gsub("[:/]"; "-"))}
+            else . + {distro: (.image | gsub("[:/]"; "-"))}
             end
           )')
 
@@ -70,35 +70,35 @@ jobs:
             HAS_ARCH_PACKAGES=true
           fi
 
-          # Deduplicate distros by digest, then expand with architectures
-          MATRIX=$(echo "$DISTROS_NORMALIZED" | jq -r '.[] | @json' | while IFS= read -r distro_item; do
-            container=$(echo "$distro_item" | jq -r '.container')
+          # Deduplicate images by digest, then expand with architectures
+          MATRIX=$(echo "$IMAGES_NORMALIZED" | jq -r '.[] | @json' | while IFS= read -r distro_item; do
+            image=$(echo "$distro_item" | jq -r '.image')
             distro=$(echo "$distro_item" | jq -r '.distro')
-            
+
             # Get digest for the container image
-            digest=$(docker buildx imagetools inspect "$container" --format '{{.Manifest.Digest}}')
-            
+            digest=$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')
+
             echo "$distro_item" | jq -c --arg digest "$digest" '. + {digest: $digest}'
           done | jq -sc --argjson arches "$ARCHES_NORMALIZED" --argjson has_arch "$HAS_ARCH_PACKAGES" '
-            # Deduplicate distros by digest
+            # Deduplicate images by digest
             reduce .[] as $distro (
-              {seen: {}, distros: []};
+              {seen: {}, images: []};
               if .seen[$distro.digest] then
                 .  # Skip duplicate distro
               else
                 .seen[$distro.digest] = true |
-                .distros += [$distro]
+                .images += [$distro]
               end
             ) |
-            # Expand each unique distro with architectures
-            .distros |
+            # Expand each unique image with architectures
+            .images |
             map(
               . as $d |
               if $has_arch then
                 # Include all architectures
                 $arches | to_entries | map(
                   {
-                    container: $d.container,
+                    image: $d.image,
                     distro: $d.distro,
                     arch: .value.arch,
                     runner: .value.runner,
@@ -108,7 +108,7 @@ jobs:
               else
                 # Only include first architecture
                 [{
-                  container: $d.container,
+                  image: $d.image,
                   distro: $d.distro,
                   arch: $arches[0].arch,
                   runner: $arches[0].runner,
@@ -129,7 +129,7 @@ jobs:
       matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
 
     container:
-      image: ${{ matrix.container }}
+      image: ${{ matrix.image }}
       env:
         DEBIAN_FRONTEND: noninteractive
 
