@@ -16,41 +16,8 @@ permissions:
   contents: write
 
 jobs:
-  debug:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Dump all contexts
-        uses: actions/github-script@v8
-        with:
-          script: |
-            console.log('=== CONTEXT OBJECT ===');
-            console.log(JSON.stringify(context, null, 2));
-            
-            console.log('\n=== GITHUB (Octokit) ===');
-            console.log('Type:', typeof github);
-            console.log('Keys:', Object.keys(github));
-            
-            console.log('\n=== CORE ===');
-            console.log('Type:', typeof core);
-            console.log('Keys:', Object.keys(core));
-            
-            console.log('\n=== PROCESS.ENV (selected) ===');
-            const envKeys = Object.keys(process.env).filter(k => 
-              k.startsWith('GITHUB_') || k.startsWith('RUNNER_')
-            );
-            const envVars = {};
-            envKeys.forEach(k => envVars[k] = process.env[k]);
-            console.log(JSON.stringify(envVars, null, 2));
-            
-            console.log('\n=== KEY VALUES ===');
-            console.log('context.ref:', context.ref);
-            console.log('context.ref_name:', context.ref_name);
-            console.log('context.ref_type:', context.ref_type);
-            console.log('context.eventName:', context.eventName);
-
   promote:
     runs-on: ubuntu-latest
-    needs: debug
 
     steps:
       - name: Promote releases
@@ -93,7 +60,7 @@ jobs:
             // Check if we're in tag context - only process specific tag
             const refType = process.env.GITHUB_REF_TYPE;
             const refName = process.env.GITHUB_REF_NAME;
-            
+
             if (refType === 'tag') {
               const match = refName.match(releasePattern);
               if (!match || !match[1]) {
@@ -148,11 +115,14 @@ jobs:
               // Check if waiting period has passed
               if (daysElapsed >= afterDays) {
                 console.log(`Promoting ${tag} to full release (waited ${daysElapsed} days)`);
+
+                // Use 'legacy' to let GitHub determine if this should be latest
                 await github.rest.repos.updateRelease({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   release_id: release.id,
-                  prerelease: false
+                  prerelease: false,
+                  make_latest: 'legacy'
                 });
               } else {
                 const daysRemaining = afterDays - daysElapsed;
