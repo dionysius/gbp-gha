@@ -44,17 +44,12 @@ jobs:
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: 'results_*/*'
-      - name: create draft release with assets
+      - name: create release with assets
         uses: softprops/action-gh-release@v2
         with:
-          draft: true
+          draft: ${{ !inputs.publish }}
+          prerelease: ${{ inputs.prerelease }}
           fail_on_unmatched_files: true
           body_path: changelog
           files: |
             results_*/*
-      - name: publish release
-        if: ${{ inputs.publish }}
-        uses: softprops/action-gh-release@v2
-        with:
-          draft: false
-          prerelease: ${{ inputs.prerelease }}
