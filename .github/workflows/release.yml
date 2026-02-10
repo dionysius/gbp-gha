@@ -4,11 +4,11 @@ on:
   workflow_call:
     inputs:
       prerelease:
-        description: 'Mark release as pre-release'
+        description: 'Mark release as pre-release (requires publish to be true)'
         type: boolean
         default: false
       publish:
-        description: 'Publish release (set draft to false after creation)'
+        description: 'Publish release (if false, will create a draft release)'
         type: boolean
         default: false
 

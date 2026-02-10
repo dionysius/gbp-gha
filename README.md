@@ -34,15 +34,10 @@ jobs:
 - **`DEBFULLNAME`** (required): Full name for Debian changelog
 - **`DEBEMAIL`** (required): Email for Debian changelog
 - **`before_build_deps_install`** (optional): Shell commands to run before installing build dependencies
-- **`images`** (optional): JSON array of container images to build for
+- **`images`** (optional): JSON array as string of container images to build for
   - Default: `["ubuntu:latest", "debian:stable"]`
-  - Can be simple strings (container names) or objects with `container` and optional `distro` keys
-  - Example: `["ubuntu:24.04", "debian:12"]`
-- **`architectures`** (optional): JSON array of architecture names to build for
-  - Default: `["amd64"]`
-  - ARM architectures (`arm64`, `armhf`, `armv7`) use GitHub's ARM runners (`ubuntu-24.04-arm`)
-  - All other architectures use x64 runners (`ubuntu-latest`)
-  - Example: `["amd64", "arm64"]`
+- **`architectures`** (optional): JSON array as string of architecture names to build for
+  - Default: `["amd64"]`, available: `["amd64", "arm64"]`
 
 #### Build Secrets
 
@@ -113,8 +108,7 @@ jobs:
 
 - **`prerelease`** (optional): Mark release as pre-release (default: `false`)
 - **`publish`** (optional): Immediately publish the release (default: `false`)
-  - When `true`, publishes the release immediately
-  - When `false`, creates a draft release for manual review
+- if both are false, release is marked as draft
 
 #### Release Strategy
 
@@ -179,7 +173,7 @@ jobs:
   promote:
     uses: dionysius/gbp-gha/.github/workflows/promote-release.yml@main
     with:
-      after_days: 7
+      in_days: 7
       release_pattern: 'debian/{*.*}.*'
 ```
 
@@ -198,13 +192,13 @@ jobs:
   promote:
     uses: dionysius/gbp-gha/.github/workflows/promote-release.yml@main
     with:
-      after_days: 7
+      in_days: 7
       release_pattern: 'debian/{*.*}.*'
 ```
 
 #### Promotion Inputs
 
-- **`after_days`** (optional): Number of days to wait after the first minor release before promotion (default: `7`)
+- **`in_days`** (optional): Number of days to wait after the first minor release before promotion (default: `7`)
 - **`release_pattern`** (optional): Glob-style pattern to match and group releases (default: `'{debian/*.*}.*'`)
   - Use `{...}` to mark the captured portion that defines the version group
   - The captured group determines which releases share the same waiting period
@@ -230,10 +224,6 @@ on:
     tags:
       - 'v*'
 
-# Optional: Only needed if default workflow permissions are restricted
-# permissions:
-#   contents: write
-
 jobs:
   build:
     uses: dionysius/gbp-gha/.github/workflows/gbp-native.yml@main
@@ -257,7 +247,7 @@ jobs:
     needs: release
     uses: dionysius/gbp-gha/.github/workflows/promote-release.yml@main
     with:
-      after_days: 7
+      in_days: 7
 ```
 
 ## Notes
