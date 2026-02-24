@@ -215,7 +215,7 @@ jobs:
 
           # Install build dependencies
           if [ "$(dpkg --print-architecture)" != "${{ matrix.arch }}" ]; then
-            mk-build-deps -i -r source/debian/control -a$(dpkg --print-architecture) --host-arch ${{ matrix.arch }} -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
+            mk-build-deps -i -r source/debian/control --build-arch $(dpkg --print-architecture) --host-arch ${{ matrix.arch }} -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
           else
             mk-build-deps -i -r source/debian/control -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
           fi
