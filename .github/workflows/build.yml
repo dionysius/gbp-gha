@@ -1,0 +1,226 @@
+name: git-buildpackage native packaging
+
+on:
+  workflow_call:
+    secrets:
+      GPG_PRIVATE_KEY:
+        required: true
+    inputs:
+      DEBFULLNAME:
+        required: true
+        type: string
+      DEBEMAIL:
+        required: true
+        type: string
+      before_build_deps_install:
+        type: string
+      images:
+        description: 'JSON array of distro container images to build for (e.g. ["ubuntu:latest", "debian:stable"]).'
+        type: string
+        default: '["ubuntu:latest", "debian:stable"]'
+      architectures:
+        description: 'JSON array of architectures to build for (any of ["amd64", "arm64", "riscv64"]).'
+        type: string
+        default: '["amd64"]'
+
+permissions:
+  contents: write
+
+env:
+  DEBFULLNAME: ${{ inputs.DEBFULLNAME }}
+  DEBEMAIL: ${{ inputs.DEBEMAIL }}
+
+jobs:
+
+  prepare-matrix:
+    name: Prepare build matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.generate-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: npm install @snyk/docker-registry-v2-client docker-parse-image
+
+      - name: Generate matrix
+        uses: actions/github-script@v8
+        id: generate-matrix
+        with:
+          script: |
+            const fs = require('fs');
+            const { getManifest } = require('@snyk/docker-registry-v2-client');
+            const parseImage = require('docker-parse-image');
+
+            // Parse inputs
+            const images = JSON.parse('${{ inputs.images }}');
+            const arches = JSON.parse('${{ inputs.architectures }}');
+
+            // Define mapping of architectures to their native GitHub runners
+            // If an architecture is not in this map, it will be cross-compiled on amd64
+            const NATIVE_RUNNERS = {
+              'amd64': 'ubuntu-24.04',
+              'arm64': 'ubuntu-24.04-arm'
+            };
+
+            // Get image digest using Docker Registry API
+            async function getImageDigest(image) {
+              const parsed = parseImage(image);
+              const registry = parsed.registry || 'registry.hub.docker.com';
+              const repo = parsed.fullname.split(':')[0];
+              const tag = parsed.tag || 'latest';
+
+              const manifest = await getManifest(registry, repo, parsed.tag);
+              return manifest.manifestDigest;
+            }
+
+            // Normalize images to objects with image and distro keys
+            const normalizedImages = images.map(img => {
+              if (typeof img === 'string') {
+                return {
+                  image: img,
+                  distro: img.replace(/[:/]/g, '-')
+                };
+              }
+              return img.distro ? img : { ...img, distro: img.image.replace(/[:/]/g, '-') };
+            });
+
+            // Normalize architectures with runner info
+            const normalizedArches = arches.map(arch => ({
+              arch,
+              runner: NATIVE_RUNNERS[arch] || 'ubuntu-24.04'
+            }));
+
+            // Check if there are architecture-dependent packages
+            const controlFile = fs.readFileSync('debian/control', 'utf8');
+            const hasArchPackages = /^Architecture:/m.test(controlFile) && 
+                                    !/^Architecture:\s*all\s*$/m.test(controlFile);
+
+            // Get digests for all images in parallel
+            const imagesWithDigests = await Promise.all(
+              normalizedImages.map(async (img) => ({
+                ...img,
+                digest: await getImageDigest(img.image)
+              }))
+            );
+
+            // Deduplicate images by digest
+            const uniqueImages = Array.from(
+              imagesWithDigests
+                .reduce((map, img) => {
+                  if (!map.has(img.digest)) {
+                    map.set(img.digest, img);
+                  }
+                  return map;
+                }, new Map())
+                .values()
+            );
+
+            // Expand images with architectures
+            const matrix = uniqueImages.flatMap(img => 
+              hasArchPackages 
+                ? normalizedArches.map((arch, idx) => ({
+                    image: img.image,
+                    distro: img.distro,
+                    arch: arch.arch,
+                    runner: arch.runner,
+                    is_primary: idx === 0
+                  }))
+                : [{
+                    image: img.image,
+                    distro: img.distro,
+                    arch: normalizedArches[0].arch,
+                    runner: normalizedArches[0].runner,
+                    is_primary: true
+                  }]
+            );
+
+            // Set output
+            core.setOutput('matrix', JSON.stringify({ include: matrix }));
+
+  build-native:
+    name: ${{ matrix.distro }} (${{ matrix.arch }})
+    needs: prepare-matrix
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
+
+    container:
+      image: ${{ matrix.image }}
+      env:
+        DEBIAN_FRONTEND: noninteractive
+
+    steps:
+      # because job is in container
+      - name: latest git from backports
+        # https://github.com/actions/runner/issues/1533
+        shell: bash
+        run: |
+          # https://github.com/actions/runner-images/issues/675
+          echo 'Acquire::Retries "3";' | tee /etc/apt/apt.conf.d/99ci
+
+          # install git
+          apt-get update
+          apt-get install -y git
+      - name: check out
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          path: source
+      - name: install
+        # https://github.com/actions/runner/issues/1533
+        shell: bash
+        run: |
+          git config --global user.name "${DEBFULLNAME}"
+          git config --global user.email "${DEBEMAIL}"
+
+          apt-get install -y debhelper-compat git-buildpackage equivs
+
+          if [ "$(dpkg --print-architecture)" != "${{ matrix.arch }}" ]; then
+            dpkg --add-architecture ${{ matrix.arch }}
+            apt-get update
+            apt-get install -y crossbuild-essential-${{ matrix.arch }}
+          fi
+      - name: build deb
+        # https://github.com/actions/runner/issues/1533
+        shell: bash
+        run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --import
+
+          . /etc/os-release
+
+          ${{ inputs.before_build_deps_install }}
+
+          # Install build dependencies (works for both native and cross-compilation)
+          mk-build-deps -i -r source/debian/control -a${{ matrix.arch }} -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
+          rm -f *.deb *.buildinfo *.changes
+
+          pushd source
+
+          PARENTVERSION=$(dpkg-parsechangelog --show-field Version)
+          dch -b -D "${VERSION_CODENAME}" -v "${PARENTVERSION}~${VERSION_CODENAME}" "Release for ${VERSION_CODENAME}"
+          git add .
+          git commit -m "Update changelog for $(dpkg-parsechangelog --show-field Version) release"
+
+          # Primary architecture: full build (source + all binaries), secondaries: binary-arch only (no _all packages)
+          if [ "${{ matrix.is_primary }}" = "true" ]; then
+            gbp buildpackage -a${{ matrix.arch }} -F --git-export-dir=.. --git-ignore-branch
+          else
+            gbp buildpackage -a${{ matrix.arch }} -B --git-export-dir=.. --git-ignore-branch
+          fi
+
+          popd
+      - name: upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: results_${{ matrix.distro }}_${{ matrix.arch }}
+          retention-days: 1
+          path: |
+            *.buildinfo
+            *.changes
+            *.ddeb
+            *.deb
+            *.dsc
+            *.tar*
