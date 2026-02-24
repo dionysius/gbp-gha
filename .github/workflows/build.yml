@@ -19,7 +19,7 @@ on:
         type: string
         default: '["ubuntu:latest", "debian:stable"]'
       architectures:
-        description: 'JSON array of architectures to build for (any of ["amd64", "arm64", "riscv64"]).'
+        description: 'JSON array of Debian architectures to build for (e.g., ["amd64", "arm64", "riscv64"]).'
         type: string
         default: '["amd64"]'
 
@@ -181,7 +181,14 @@ jobs:
           if [ "$(dpkg --print-architecture)" != "${{ matrix.arch }}" ]; then
             dpkg --add-architecture ${{ matrix.arch }}
             apt-get update
-            apt-get install -y crossbuild-essential-${{ matrix.arch }}
+            
+            # Install cross-compilation tools
+            # Note: crossbuild-essential-riscv64 doesn't exist yet, use direct compiler packages
+            if apt-cache show crossbuild-essential-${{ matrix.arch }} >/dev/null 2>&1; then
+              apt-get install -y crossbuild-essential-${{ matrix.arch }}
+            else
+              apt-get install -y gcc-${{ matrix.arch }}-linux-gnu g++-${{ matrix.arch }}-linux-gnu dpkg-cross
+            fi
           fi
       - name: build deb
         # https://github.com/actions/runner/issues/1533
