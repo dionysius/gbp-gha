@@ -184,7 +184,7 @@ jobs:
             # On Ubuntu, add ports repository for non-x86 architectures
             . /etc/os-release
             if [ "$ID" = "ubuntu" ] && [ "${{ matrix.arch }}" != "amd64" ] && [ "${{ matrix.arch }}" != "i386" ]; then
-              cat > /etc/apt/sources.list.d/ports.sources <<'EOF'
+              cat > /etc/apt/sources.list.d/ports.sources <<EOF
           Types: deb
           URIs: http://ports.ubuntu.com/ubuntu-ports
           Suites: ${VERSION_CODENAME} ${VERSION_CODENAME}-updates ${VERSION_CODENAME}-security
@@ -215,7 +215,7 @@ jobs:
 
           # Install build dependencies
           if [ "$(dpkg --print-architecture)" != "${{ matrix.arch }}" ]; then
-            mk-build-deps -i -r source/debian/control --host-arch ${{ matrix.arch }} -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
+            mk-build-deps -i -r source/debian/control -a$(dpkg --print-architecture) --host-arch ${{ matrix.arch }} -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
           else
             mk-build-deps -i -r source/debian/control -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
           fi
