@@ -198,6 +198,23 @@ jobs:
             # On Ubuntu, add ports repository for non-x86 architectures
             . /etc/os-release
             if [ "$ID" = "ubuntu" ] && [ "${{ matrix.arch }}" != "amd64" ] && [ "${{ matrix.arch }}" != "i386" ]; then
+              NATIVE_ARCH=$(dpkg --print-architecture)
+              # Restrict existing sources to native architecture only
+              # Handle both old sources.list format and new DEB822 .sources format
+              if [ -f /etc/apt/sources.list ]; then
+                sed -i "s/^deb /deb [arch=${NATIVE_ARCH}] /" /etc/apt/sources.list
+              fi
+              for sourcefile in /etc/apt/sources.list.d/*.sources; do
+                [ -f "$sourcefile" ] || continue
+                # Add Architectures field if not present, otherwise update it
+                if grep -q "^Architectures:" "$sourcefile"; then
+                  sed -i "s/^Architectures:.*/Architectures: ${NATIVE_ARCH}/" "$sourcefile"
+                else
+                  sed -i "/^Types:/a Architectures: ${NATIVE_ARCH}" "$sourcefile"
+                fi
+              done
+
+              # Add ports repository for the target architecture
               cat > /etc/apt/sources.list.d/ports.sources <<EOF
           Types: deb
           URIs: http://ports.ubuntu.com/ubuntu-ports
