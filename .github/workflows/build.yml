@@ -169,7 +169,21 @@ jobs:
         with:
           fetch-depth: 0
           path: source
+      - name: check architecture support
+        id: arch_check
+        shell: bash
+        run: |
+          # Check if this architecture is supported for cross-compilation in this distro
+          if [ "$(dpkg --print-architecture)" != "${{ matrix.arch }}" ]; then
+            if ! apt-cache show crossbuild-essential-${{ matrix.arch }} >/dev/null 2>&1; then
+              echo "::warning::Build skipped - crossbuild-essential-${{ matrix.arch }} not available in ${{ matrix.distro }}"
+              echo "Build skipped - crossbuild-essential-${{ matrix.arch }} not available in ${{ matrix.distro }}" >> $GITHUB_STEP_SUMMARY
+              echo "skip=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
       - name: install
+        if: steps.arch_check.outputs.skip != 'true'
         # https://github.com/actions/runner/issues/1533
         shell: bash
         run: |
@@ -204,6 +218,7 @@ jobs:
             fi
           fi
       - name: build deb
+        if: steps.arch_check.outputs.skip != 'true'
         # https://github.com/actions/runner/issues/1533
         shell: bash
         run: |
@@ -215,7 +230,7 @@ jobs:
 
           # Install build dependencies
           if [ "$(dpkg --print-architecture)" != "${{ matrix.arch }}" ]; then
-            mk-build-deps -i -r source/debian/control --build-arch $(dpkg --print-architecture) --host-arch ${{ matrix.arch }} -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
+            mk-build-deps -i -r source/debian/control --host-arch ${{ matrix.arch }} -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
           else
             mk-build-deps -i -r source/debian/control -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
           fi
@@ -243,6 +258,7 @@ jobs:
 
           popd
       - name: upload artifacts
+        if: steps.arch_check.outputs.skip != 'true'
         uses: actions/upload-artifact@v6
         with:
           name: results_${{ matrix.distro }}_${{ matrix.arch }}
