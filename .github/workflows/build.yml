@@ -180,10 +180,23 @@ jobs:
 
           if [ "$(dpkg --print-architecture)" != "${{ matrix.arch }}" ]; then
             dpkg --add-architecture ${{ matrix.arch }}
+
+            # On Ubuntu, add ports repository for non-x86 architectures
+            . /etc/os-release
+            if [ "$ID" = "ubuntu" ] && [ "${{ matrix.arch }}" != "amd64" ] && [ "${{ matrix.arch }}" != "i386" ]; then
+              cat > /etc/apt/sources.list.d/ports.sources <<'EOF'
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports
+          Suites: ${VERSION_CODENAME} ${VERSION_CODENAME}-updates ${VERSION_CODENAME}-security
+          Components: main universe
+          Architectures: ${{ matrix.arch }}
+          EOF
+            fi
+
             apt-get update
-            
+
             # Install cross-compilation tools
-            # Note: crossbuild-essential-riscv64 doesn't exist yet, use direct compiler packages
+            # If crossbuild-essential-<arch> doesn't exist yet, use direct compiler packages
             if apt-cache show crossbuild-essential-${{ matrix.arch }} >/dev/null 2>&1; then
               apt-get install -y crossbuild-essential-${{ matrix.arch }}
             else
