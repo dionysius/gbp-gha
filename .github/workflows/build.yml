@@ -213,8 +213,12 @@ jobs:
 
           ${{ inputs.before_build_deps_install }}
 
-          # Install build dependencies (works for both native and cross-compilation)
-          mk-build-deps -i -r source/debian/control -a${{ matrix.arch }} -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
+          # Install build dependencies
+          if [ "$(dpkg --print-architecture)" != "${{ matrix.arch }}" ]; then
+            mk-build-deps -i -r source/debian/control --host-arch ${{ matrix.arch }} -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
+          else
+            mk-build-deps -i -r source/debian/control -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
+          fi
           rm -f *.deb *.buildinfo *.changes
 
           pushd source
@@ -225,10 +229,16 @@ jobs:
           git commit -m "Update changelog for $(dpkg-parsechangelog --show-field Version) release"
 
           # Primary architecture: full build (source + all binaries), secondaries: binary-arch only (no _all packages)
+          ARCH_FLAG=""
+          # For cross-compilation, use -a flag to specify target architecture
+          if [ "$(dpkg --print-architecture)" != "${{ matrix.arch }}" ]; then
+            ARCH_FLAG="-a${{ matrix.arch }}"
+          fi
+
           if [ "${{ matrix.is_primary }}" = "true" ]; then
-            gbp buildpackage -a${{ matrix.arch }} -F --git-export-dir=.. --git-ignore-branch
+            gbp buildpackage $ARCH_FLAG -F --git-export-dir=.. --git-ignore-branch
           else
-            gbp buildpackage -a${{ matrix.arch }} -B --git-export-dir=.. --git-ignore-branch
+            gbp buildpackage $ARCH_FLAG -B --git-export-dir=.. --git-ignore-branch
           fi
 
           popd
