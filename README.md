@@ -4,14 +4,14 @@ Reusable GitHub Actions workflows for building Debian packages using git-buildpa
 
 ## Workflows
 
-### `gbp-native.yml` - Build Debian Packages
+### `build.yml` - Build Debian Packages
 
-Builds Debian packages natively on specified distributions and architectures.
+Builds Debian packages on specified distributions and architectures using native builds or cross-compilation.
 
 #### Build Features
 
 - **Multi-distribution support**: Build on Debian, Ubuntu, or any Debian-based distro
-- **Multi-architecture support**: Native builds on x64 (amd64) and ARM (arm64) using GitHub's runners
+- **Multi-architecture support**: Native builds on amd64 and arm64 using GitHub's runners, cross-compilation for other architectures (e.g., riscv64)
 - **Configurable matrix**: Callers can specify custom combinations of images and architectures
 - **GPG signing**: Automatically signs packages with provided GPG key
 - **Artifact upload**: Uploads built packages as workflow artifacts
@@ -21,7 +21,7 @@ Builds Debian packages natively on specified distributions and architectures.
 ```yaml
 jobs:
   build:
-    uses: dionysius/gbp-gha/.github/workflows/gbp-native.yml@main
+    uses: dionysius/gbp-gha/.github/workflows/build.yml@main
     secrets:
       GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
     with:
@@ -34,10 +34,16 @@ jobs:
 - **`DEBFULLNAME`** (required): Full name for Debian changelog
 - **`DEBEMAIL`** (required): Email for Debian changelog
 - **`before_build_deps_install`** (optional): Shell commands to run before installing build dependencies
+- **`DEB_BUILD_OPTIONS`** (optional): Space-separated list of build options (e.g., `"parallel=4 nostrip"`)
+- **`DEB_BUILD_PROFILES`** (optional): Space-separated list of build profiles (e.g., `"nodoc nocheck"`)
 - **`images`** (optional): JSON array as string of container images to build for
   - Default: `["ubuntu:latest", "debian:stable"]`
 - **`architectures`** (optional): JSON array as string of architecture names to build for
-  - Default: `["amd64"]`, available: `["amd64", "arm64"]`
+  - Default: `["amd64"]`
+  - Native builds: `amd64`, `arm64`
+  - Cross-compilation: `riscv64`, `armhf`, `i386`, and other Debian architectures with available crossbuild-essential packages
+
+> Cross-compilation builds automatically configure base DEB environment (`cross` profile and `nocheck` for skipping tests).
 
 #### Build Secrets
 
@@ -50,27 +56,17 @@ Build on multiple images and architectures:
 ```yaml
 jobs:
   build:
-    uses: dionysius/gbp-gha/.github/workflows/gbp-native.yml@main
+    uses: dionysius/gbp-gha/.github/workflows/build.yml@main
     secrets:
       GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
     with:
       DEBFULLNAME: "Your Name"
       DEBEMAIL: "your.email@example.com"
-      images: |
-        [
-          "ubuntu:24.04",
-          "ubuntu:22.04",
-          "debian:12",
-          "debian:11"
-        ]
-      architectures: |
-        [
-          "amd64",
-          "arm64"
-        ]
+      images: '["ubuntu:latest", "debian:stable", "debian:oldstable"]'
+      architectures: '["amd64", "arm64", "riscv64"]'
 ```
 
-This will create 8 build jobs (4 images × 2 architectures).
+This will create 12 build jobs (4 images × 3 architectures).
 
 ### `release.yml` - Create GitHub Release
 
@@ -89,7 +85,7 @@ Creates a GitHub release with all built artifacts from the build workflow.
 ```yaml
 jobs:
   build:
-    uses: dionysius/gbp-gha/.github/workflows/gbp-native.yml@main
+    uses: dionysius/gbp-gha/.github/workflows/build.yml@main
     secrets:
       GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
     with:
@@ -226,14 +222,14 @@ on:
 
 jobs:
   build:
-    uses: dionysius/gbp-gha/.github/workflows/gbp-native.yml@main
+    uses: dionysius/gbp-gha/.github/workflows/build.yml@main
     secrets:
       GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
     with:
       DEBFULLNAME: "Your Name"
       DEBEMAIL: "your.email@example.com"
-      images: ["ubuntu:latest", "debian:stable"]
-      architectures: ["amd64", "arm64"]
+      images: '["ubuntu:latest", "debian:stable", "debian:oldstable"]'
+      architectures: '["amd64", "arm64", "riscv64"]'
 
   release:
     needs: build

@@ -1,0 +1,294 @@
+name: git-buildpackage
+
+on:
+  workflow_call:
+    secrets:
+      GPG_PRIVATE_KEY:
+        required: true
+    inputs:
+      DEBFULLNAME:
+        description: 'Full name for Debian package maintainer (used in changelog entries).'
+        required: true
+        type: string
+      DEBEMAIL:
+        description: 'Email address for Debian package maintainer (used in changelog entries).'
+        required: true
+        type: string
+      before_build_deps_install:
+        description: 'Shell commands to run before installing build dependencies (e.g., adding repositories). Available variables: ARCH (target architecture), DEBFULLNAME, DEBEMAIL, DEB_BUILD_OPTIONS, DEB_BUILD_PROFILES, everything from /etc/os-release.'
+        type: string
+      DEB_BUILD_OPTIONS:
+        description: 'Space-separated list of build options (e.g., "parallel=4 nostrip"). "nocheck" is automatically added for cross-builds.'
+        type: string
+        default: ''
+      DEB_BUILD_PROFILES:
+        description: 'Space-separated list of build profiles (e.g., "nodoc pkg.foo.minimal"). "cross nocheck" is automatically added for cross-builds.'
+        type: string
+        default: ''
+      images:
+        description: 'JSON array of distro container images to build for (e.g. ["ubuntu:latest", "debian:stable"]).'
+        type: string
+        default: '["ubuntu:latest", "debian:stable"]'
+      architectures:
+        description: 'JSON array of Debian architectures to build for (e.g., ["amd64", "arm64", "riscv64"]).'
+        type: string
+        default: '["amd64"]'
+
+permissions:
+  contents: write
+
+env:
+  DEBFULLNAME: ${{ inputs.DEBFULLNAME }}
+  DEBEMAIL: ${{ inputs.DEBEMAIL }}
+  DEB_BUILD_OPTIONS: ${{ inputs.DEB_BUILD_OPTIONS }}
+  DEB_BUILD_PROFILES: ${{ inputs.DEB_BUILD_PROFILES }}
+
+jobs:
+
+  prepare-matrix:
+    name: Prepare build matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.generate-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: npm install @snyk/docker-registry-v2-client docker-parse-image
+
+      - name: Generate matrix
+        uses: actions/github-script@v8
+        id: generate-matrix
+        with:
+          script: |
+            const fs = require('fs');
+            const { getManifest } = require('@snyk/docker-registry-v2-client');
+            const parseImage = require('docker-parse-image');
+
+            // Parse inputs
+            const images = JSON.parse('${{ inputs.images }}');
+            const arches = JSON.parse('${{ inputs.architectures }}');
+
+            // Define mapping of architectures to their native GitHub runners
+            // If an architecture is not in this map, it will be cross-compiled on amd64
+            const NATIVE_RUNNERS = {
+              'amd64': 'ubuntu-24.04',
+              'arm64': 'ubuntu-24.04-arm'
+            };
+
+            // Get image digest using Docker Registry API
+            async function getImageDigest(image) {
+              const parsed = parseImage(image);
+              const registry = parsed.registry || 'registry.hub.docker.com';
+              const repo = parsed.fullname.split(':')[0];
+              const tag = parsed.tag || 'latest';
+
+              const manifest = await getManifest(registry, repo, parsed.tag);
+              return manifest.manifestDigest;
+            }
+
+            // Normalize images to objects with image and distro keys
+            const normalizedImages = images.map(img => {
+              if (typeof img === 'string') {
+                return {
+                  image: img,
+                  distro: img.replace(/[:/]/g, '-')
+                };
+              }
+              return img.distro ? img : { ...img, distro: img.image.replace(/[:/]/g, '-') };
+            });
+
+            // Normalize architectures with runner info
+            const normalizedArches = arches.map(arch => ({
+              arch,
+              runner: NATIVE_RUNNERS[arch] || 'ubuntu-24.04'
+            }));
+
+            // Check if there are architecture-dependent packages
+            // True if at least one Architecture field is NOT "all" (e.g., "any", "amd64 arm64", etc.)
+            const controlFile = fs.readFileSync('debian/control', 'utf8');
+            const hasArchPackages = /^Architecture:\s*(?!all\s*$)\S+/m.test(controlFile);
+
+            // Get digests for all images in parallel
+            const imagesWithDigests = await Promise.all(
+              normalizedImages.map(async (img) => ({
+                ...img,
+                digest: await getImageDigest(img.image)
+              }))
+            );
+
+            // Deduplicate images by digest
+            const uniqueImages = Array.from(
+              imagesWithDigests
+                .reduce((map, img) => {
+                  if (!map.has(img.digest)) {
+                    map.set(img.digest, img);
+                  }
+                  return map;
+                }, new Map())
+                .values()
+            );
+
+            // Expand images with architectures
+            const matrix = uniqueImages.flatMap(img => 
+              hasArchPackages 
+                ? normalizedArches.map((arch, idx) => ({
+                    image: img.image,
+                    distro: img.distro,
+                    arch: arch.arch,
+                    runner: arch.runner,
+                    is_primary: idx === 0
+                  }))
+                : [{
+                    image: img.image,
+                    distro: img.distro,
+                    arch: normalizedArches[0].arch,
+                    runner: normalizedArches[0].runner,
+                    is_primary: true
+                  }]
+            );
+
+            // Set output
+            core.setOutput('matrix', JSON.stringify({ include: matrix }));
+
+  build-native:
+    name: ${{ matrix.distro }} (${{ matrix.arch }})
+    needs: prepare-matrix
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
+
+    container:
+      image: ${{ matrix.image }}
+      env:
+        DEBIAN_FRONTEND: noninteractive
+
+    steps:
+      # because job is in container
+      - name: latest git from backports
+        # https://github.com/actions/runner/issues/1533
+        shell: bash
+        run: |
+          # https://github.com/actions/runner-images/issues/675
+          echo 'Acquire::Retries "3";' | tee /etc/apt/apt.conf.d/99ci
+
+          # install git
+          apt-get update
+          apt-get install -y git
+      - name: check out
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          path: source
+      - name: install
+        id: install
+        # https://github.com/actions/runner/issues/1533
+        shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          CROSSBUILD_PKG="crossbuild-essential-${ARCH}"
+
+          # Check if this architecture is supported for cross-compilation in this distro
+          if [ "$(dpkg --print-architecture)" != "$ARCH" ]; then
+            if [ -z "$(apt-cache madison $CROSSBUILD_PKG 2>/dev/null)" ]; then
+              echo "::warning::Build skipped - $CROSSBUILD_PKG not available in ${{ matrix.distro }}"
+              echo "Build skipped - $CROSSBUILD_PKG not available in ${{ matrix.distro }}" >> $GITHUB_STEP_SUMMARY
+              echo "skip=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+
+          git config --global user.name "${DEBFULLNAME}"
+          git config --global user.email "${DEBEMAIL}"
+
+          apt-get install -y debhelper-compat git-buildpackage equivs
+
+          if [ "$(dpkg --print-architecture)" != "$ARCH" ]; then
+            dpkg --add-architecture $ARCH
+
+            # On Ubuntu, add ports repository for non-x86 architectures
+            . /etc/os-release
+            if [ "$ID" = "ubuntu" ] && [ "$ARCH" != "amd64" ] && [ "$ARCH" != "i386" ]; then
+              NATIVE_ARCH=$(dpkg --print-architecture)
+              # Restrict existing sources to native architecture only
+              # Handle both old sources.list format and new DEB822 .sources format
+              if [ -f /etc/apt/sources.list ]; then
+                sed -i "s/^deb /deb [arch=${NATIVE_ARCH}] /" /etc/apt/sources.list
+              fi
+              for sourcefile in /etc/apt/sources.list.d/*.sources; do
+                [ -f "$sourcefile" ] || continue
+                # Add Architectures field if not present, otherwise update it
+                if grep -q "^Architectures:" "$sourcefile"; then
+                  sed -i "s/^Architectures:.*/Architectures: ${NATIVE_ARCH}/" "$sourcefile"
+                else
+                  sed -i "/^Types:/a Architectures: ${NATIVE_ARCH}" "$sourcefile"
+                fi
+              done
+
+              # Add ports repository for the target architecture
+              cat > /etc/apt/sources.list.d/ports.sources <<EOF
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports
+          Suites: ${VERSION_CODENAME} ${VERSION_CODENAME}-updates ${VERSION_CODENAME}-security
+          Components: main universe
+          Architectures: ${ARCH}
+          EOF
+            fi
+
+            apt-get update
+            apt-get install -y $CROSSBUILD_PKG
+          fi
+      - name: build deb
+        if: steps.install.outputs.skip != 'true'
+        # https://github.com/actions/runner/issues/1533
+        shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --import
+
+          . /etc/os-release
+
+          # Set cross-compilation environment for cross-builds
+          if [ "$(dpkg --print-architecture)" != "$ARCH" ]; then
+            export DEB_BUILD_OPTIONS="${DEB_BUILD_OPTIONS:+${DEB_BUILD_OPTIONS} }nocheck"
+            export DEB_BUILD_PROFILES="${DEB_BUILD_PROFILES:+${DEB_BUILD_PROFILES} }cross nocheck"
+          fi
+
+          ${{ inputs.before_build_deps_install }}
+
+          # Install build dependencies
+          mk-build-deps -i -r source/debian/control --host-arch $ARCH -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
+          rm -f *.deb *.buildinfo *.changes
+
+          pushd source
+
+          PARENTVERSION=$(dpkg-parsechangelog --show-field Version)
+          dch -b -D "${VERSION_CODENAME}" -v "${PARENTVERSION}~${VERSION_CODENAME}" "Release for ${VERSION_CODENAME}"
+          git add .
+          git commit -m "Update changelog for $(dpkg-parsechangelog --show-field Version) release"
+
+          # Primary architecture: full build (source + all binaries), secondaries: binary-arch only (no _all packages)
+          if [ "${{ matrix.is_primary }}" = "true" ]; then
+            gbp buildpackage -F "-a${ARCH}" --git-export-dir=.. --git-ignore-branch
+          else
+            gbp buildpackage -B "-a${ARCH}" --git-export-dir=.. --git-ignore-branch
+          fi
+
+          popd
+      - name: upload artifacts
+        if: steps.install.outputs.skip != 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: results_${{ matrix.distro }}_${{ matrix.arch }}
+          retention-days: 1
+          path: |
+            *.buildinfo
+            *.changes
+            *.ddeb
+            *.deb
+            *.dsc
+            *.tar*
