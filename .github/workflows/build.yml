@@ -93,9 +93,9 @@ jobs:
             }));
 
             // Check if there are architecture-dependent packages
+            // True if at least one Architecture field is NOT "all" (e.g., "any", "amd64 arm64", etc.)
             const controlFile = fs.readFileSync('debian/control', 'utf8');
-            const hasArchPackages = /^Architecture:/m.test(controlFile) && 
-                                    !/^Architecture:\s*all\s*$/m.test(controlFile);
+            const hasArchPackages = /^Architecture:\s*(?!all\s*$)\S+/m.test(controlFile);
 
             // Get digests for all images in parallel
             const imagesWithDigests = await Promise.all(
