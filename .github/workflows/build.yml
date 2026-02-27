@@ -1,4 +1,4 @@
-name: git-buildpackage native packaging
+name: git-buildpackage
 
 on:
   workflow_call:
@@ -7,13 +7,20 @@ on:
         required: true
     inputs:
       DEBFULLNAME:
+        description: 'Full name for Debian package maintainer (used in changelog entries).'
         required: true
         type: string
       DEBEMAIL:
+        description: 'Email address for Debian package maintainer (used in changelog entries).'
         required: true
         type: string
       before_build_deps_install:
+        description: 'Shell commands to run before installing build dependencies (e.g., adding repositories).'
         type: string
+      DEB_BUILD_OPTIONS:
+        description: 'Space-separated list of build options (e.g., "parallel=4 nostrip"). "nocheck" is automatically added for cross-builds.'
+        type: string
+        default: ''
       images:
         description: 'JSON array of distro container images to build for (e.g. ["ubuntu:latest", "debian:stable"]).'
         type: string
@@ -29,6 +36,7 @@ permissions:
 env:
   DEBFULLNAME: ${{ inputs.DEBFULLNAME }}
   DEBEMAIL: ${{ inputs.DEBEMAIL }}
+  DEB_BUILD_OPTIONS: ${{ inputs.DEB_BUILD_OPTIONS }}
 
 jobs:
 
@@ -169,35 +177,36 @@ jobs:
         with:
           fetch-depth: 0
           path: source
-      - name: check architecture support
-        id: arch_check
+      - name: install
+        id: install
+        # https://github.com/actions/runner/issues/1533
         shell: bash
+        env:
+          DEB_HOST_ARCH: ${{ matrix.arch }}
         run: |
+          CROSSBUILD_PKG="crossbuild-essential-${DEB_HOST_ARCH}"
+
           # Check if this architecture is supported for cross-compilation in this distro
-          if [ "$(dpkg --print-architecture)" != "${{ matrix.arch }}" ]; then
-            if [ -z "$(apt-cache madison crossbuild-essential-${{ matrix.arch }} 2>/dev/null)" ]; then
-              echo "::warning::Build skipped - crossbuild-essential-${{ matrix.arch }} not available in ${{ matrix.distro }}"
-              echo "Build skipped - crossbuild-essential-${{ matrix.arch }} not available in ${{ matrix.distro }}" >> $GITHUB_STEP_SUMMARY
+          if [ "$(dpkg --print-architecture)" != "$DEB_HOST_ARCH" ]; then
+            if [ -z "$(apt-cache madison $CROSSBUILD_PKG 2>/dev/null)" ]; then
+              echo "::warning::Build skipped - $CROSSBUILD_PKG not available in ${{ matrix.distro }}"
+              echo "Build skipped - $CROSSBUILD_PKG not available in ${{ matrix.distro }}" >> $GITHUB_STEP_SUMMARY
               echo "skip=true" >> $GITHUB_OUTPUT
               exit 0
             fi
           fi
-      - name: install
-        if: steps.arch_check.outputs.skip != 'true'
-        # https://github.com/actions/runner/issues/1533
-        shell: bash
-        run: |
+
           git config --global user.name "${DEBFULLNAME}"
           git config --global user.email "${DEBEMAIL}"
 
           apt-get install -y debhelper-compat git-buildpackage equivs
 
-          if [ "$(dpkg --print-architecture)" != "${{ matrix.arch }}" ]; then
-            dpkg --add-architecture ${{ matrix.arch }}
+          if [ "$(dpkg --print-architecture)" != "$DEB_HOST_ARCH" ]; then
+            dpkg --add-architecture $DEB_HOST_ARCH
 
             # On Ubuntu, add ports repository for non-x86 architectures
             . /etc/os-release
-            if [ "$ID" = "ubuntu" ] && [ "${{ matrix.arch }}" != "amd64" ] && [ "${{ matrix.arch }}" != "i386" ]; then
+            if [ "$ID" = "ubuntu" ] && [ "$DEB_HOST_ARCH" != "amd64" ] && [ "$DEB_HOST_ARCH" != "i386" ]; then
               NATIVE_ARCH=$(dpkg --print-architecture)
               # Restrict existing sources to native architecture only
               # Handle both old sources.list format and new DEB822 .sources format
@@ -220,27 +229,35 @@ jobs:
           URIs: http://ports.ubuntu.com/ubuntu-ports
           Suites: ${VERSION_CODENAME} ${VERSION_CODENAME}-updates ${VERSION_CODENAME}-security
           Components: main universe
-          Architectures: ${{ matrix.arch }}
+          Architectures: ${DEB_HOST_ARCH}
           EOF
             fi
 
             apt-get update
-            apt-get install -y crossbuild-essential-${{ matrix.arch }}
+            apt-get install -y $CROSSBUILD_PKG
           fi
       - name: build deb
-        if: steps.arch_check.outputs.skip != 'true'
+        if: steps.install.outputs.skip != 'true'
         # https://github.com/actions/runner/issues/1533
         shell: bash
+        env:
+          DEB_HOST_ARCH: ${{ matrix.arch }}
         run: |
           echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --import
 
           . /etc/os-release
 
+          # Append nocheck to DEB_BUILD_OPTIONS for cross-builds
+          if [ "$(dpkg --print-architecture)" != "$DEB_HOST_ARCH" ]; then
+            export DEB_BUILD_OPTIONS="${DEB_BUILD_OPTIONS:+${DEB_BUILD_OPTIONS} }nocheck"
+          fi
+
           ${{ inputs.before_build_deps_install }}
 
           # Install build dependencies
-          if [ "$(dpkg --print-architecture)" != "${{ matrix.arch }}" ]; then
-            mk-build-deps -i -r source/debian/control --host-arch ${{ matrix.arch }} -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
+          # mk-build-deps automatically uses DEB_HOST_ARCH when set
+          if [ "$(dpkg --print-architecture)" != "$DEB_HOST_ARCH" ]; then
+            mk-build-deps -i -r source/debian/control --host-arch $DEB_HOST_ARCH -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
           else
             mk-build-deps -i -r source/debian/control -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
           fi
@@ -254,21 +271,16 @@ jobs:
           git commit -m "Update changelog for $(dpkg-parsechangelog --show-field Version) release"
 
           # Primary architecture: full build (source + all binaries), secondaries: binary-arch only (no _all packages)
-          ARCH_FLAG=""
-          # For cross-compilation, use -a flag to specify target architecture
-          if [ "$(dpkg --print-architecture)" != "${{ matrix.arch }}" ]; then
-            ARCH_FLAG="-a${{ matrix.arch }}"
-          fi
-
+          # dpkg-buildpackage automatically uses DEB_HOST_ARCH when set for cross-compilation
           if [ "${{ matrix.is_primary }}" = "true" ]; then
-            gbp buildpackage $ARCH_FLAG -F --git-export-dir=.. --git-ignore-branch
+            gbp buildpackage -F --git-export-dir=.. --git-ignore-branch
           else
-            gbp buildpackage $ARCH_FLAG -B --git-export-dir=.. --git-ignore-branch
+            gbp buildpackage -B --git-export-dir=.. --git-ignore-branch
           fi
 
           popd
       - name: upload artifacts
-        if: steps.arch_check.outputs.skip != 'true'
+        if: steps.install.outputs.skip != 'true'
         uses: actions/upload-artifact@v6
         with:
           name: results_${{ matrix.distro }}_${{ matrix.arch }}
