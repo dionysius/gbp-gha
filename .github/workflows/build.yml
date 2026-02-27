@@ -175,7 +175,7 @@ jobs:
         run: |
           # Check if this architecture is supported for cross-compilation in this distro
           if [ "$(dpkg --print-architecture)" != "${{ matrix.arch }}" ]; then
-            if [ -n "$(apt-cache madison crossbuild-essential-${{ matrix.arch }} 2>/dev/null)" ]; then
+            if [ -z "$(apt-cache madison crossbuild-essential-${{ matrix.arch }} 2>/dev/null)" ]; then
               echo "::warning::Build skipped - crossbuild-essential-${{ matrix.arch }} not available in ${{ matrix.distro }}"
               echo "Build skipped - crossbuild-essential-${{ matrix.arch }} not available in ${{ matrix.distro }}" >> $GITHUB_STEP_SUMMARY
               echo "skip=true" >> $GITHUB_OUTPUT
