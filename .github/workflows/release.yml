@@ -47,9 +47,25 @@ jobs:
       - name: create release with assets
         uses: softprops/action-gh-release@v2
         with:
-          draft: ${{ !inputs.publish }}
+          draft: true
           prerelease: ${{ inputs.prerelease }}
           fail_on_unmatched_files: true
           body_path: changelog
           files: |
             results_*/*
+      - name: publish release
+        if: ${{ inputs.publish }}
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const release = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag: process.env.GITHUB_REF_NAME
+            });
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.data.id,
+              draft: false
+            });
