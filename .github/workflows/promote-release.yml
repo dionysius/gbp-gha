@@ -1,3 +1,11 @@
+# Promotes pre-releases to full releases after a waiting period. Releases are grouped by
+# a configurable glob pattern with a capture group marking the version prefix (e.g.
+# '{debian/*.*}.*' groups all patch releases under the same minor version). Once the
+# configured number of days has elapsed since the first release in a group was published,
+# all pre-releases in that group are promoted.
+#
+# Can be triggered on a schedule (processes all matching pre-releases) or by a tag push
+# (processes only the release matching that tag).
 name: promote release
 
 on:

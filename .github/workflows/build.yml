@@ -1,3 +1,12 @@
+# Builds Debian packages using git-buildpackage across a matrix of distro images and
+# architectures. The build matrix is generated dynamically: images are deduplicated by
+# digest, and architectures with native GitHub runners (amd64, arm64) build natively while
+# others are cross-compiled.
+#
+# The primary architecture produces a full source + binary build; secondary architectures
+# produce binary-arch only builds. Each build runs inside the target distro container,
+# installs build dependencies, bumps the changelog with a distro suffix, and uploads the
+# resulting Debian build artefacts under results_<distro>_<arch> for use by release.yml.
 name: git-buildpackage
 
 on:

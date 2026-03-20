@@ -1,14 +1,24 @@
+# Creates a GitHub release from artifacts uploaded by previous jobs. The changelog
+# body is extracted from the Debian changelog. Duplicate .orig.tar.gz files are
+# deduplicated. Artifact attestations are generated for all release assets.
+#
+# Expects artifacts uploaded under names matching results_<distro>_<arch> (as
+# produced by build.yml), each containing the Debian build output files.
+#
+# File uploads are always done through a draft release first to support immutable-release
+# repositories. When publish is true, the draft is published afterwards, otherwise the
+# release remains as a draft.
 name: create release with artifacts
 
 on:
   workflow_call:
     inputs:
       prerelease:
-        description: 'Mark release as pre-release (requires publish to be true)'
+        description: 'Mark release as pre-release'
         type: boolean
         default: false
       publish:
-        description: 'Publish release (if false, will create a draft release)'
+        description: 'Publish release (otherwise will create a draft release)'
         type: boolean
         default: false
 
