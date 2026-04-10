@@ -35,7 +35,7 @@ on:
         type: string
         default: ''
       images:
-        description: 'JSON array of distro container images to build for (e.g. ["ubuntu:latest", "debian:stable"]).'
+        description: 'JSON array of distro container images to build for (e.g. ["ubuntu:latest", "debian:stable"]). A pseudo-tag "ubuntu:oldlts" can be used to resolve to the previous lts.'
         type: string
         default: '["ubuntu:latest", "debian:stable"]'
       architectures:
@@ -97,16 +97,43 @@ jobs:
               return manifest.manifestDigest;
             }
 
-            // Normalize images to objects with image and distro keys
-            const normalizedImages = images.map(img => {
-              if (typeof img === 'string') {
-                return {
-                  image: img,
-                  distro: img.replace(/[:/]/g, '-')
-                };
+            // Resolve ubuntu:oldlts to the previous Ubuntu LTS version tag via Docker Hub.
+            async function resolveUbuntuOldLts() {
+              const latestDigest = await getImageDigest('ubuntu:latest');
+              const currentYear = new Date().getFullYear() % 100;
+              const startYear = currentYear % 2 === 0 ? currentYear : currentYear - 1;
+              for (let year = startYear; year >= 14; year -= 2) {
+                const tag = `${year}.04`;
+                let digest;
+                try {
+                  digest = await getImageDigest(`ubuntu:${tag}`);
+                } catch (e) {
+                  continue; // tag may not exist yet (e.g. upcoming release)
+                }
+                if (digest === latestDigest) {
+                  const oldTag = `${year - 2}.04`;
+                  core.info(`Resolved ubuntu:oldlts to ubuntu:${oldTag} (current LTS: ubuntu:${tag})`);
+                  return `ubuntu:${oldTag}`;
+                }
               }
-              return img.distro ? img : { ...img, distro: img.image.replace(/[:/]/g, '-') };
-            });
+              throw new Error('Could not determine previous Ubuntu LTS from Docker Hub tags');
+            }
+
+            // pseudo-tag to real image tag map
+            const imageOverrides = {};
+            await Promise.all(
+              images.map(async img => {
+                if (img === 'ubuntu:oldlts') {
+                  imageOverrides[img] = await resolveUbuntuOldLts();
+                }
+              })
+            );
+
+            // Normalize images to objects with image and distro keys.
+            const normalizedImages = images.map(img => ({
+              image: imageOverrides[img] || img,
+              distro: img.replace(/[:/]/g, '-')
+            }));
 
             // Normalize architectures with runner info
             const normalizedArches = arches.map(arch => ({
