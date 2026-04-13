@@ -1,6 +1,6 @@
 # Builds Debian packages using git-buildpackage across a matrix of distro images and
 # architectures. The build matrix is generated dynamically: images are deduplicated by
-# digest, and architectures with native GitHub runners (amd64, arm64) build natively while
+# digest, and architectures with with matching natives build natively on their runner while
 # others are cross-compiled.
 #
 # The primary architecture produces a full source + binary build; secondary architectures
@@ -42,6 +42,10 @@ on:
         description: 'JSON array of Debian architectures to build for (e.g., ["amd64", "arm64", "riscv64"]).'
         type: string
         default: '["amd64"]'
+      natives:
+        description: 'JSON array of architectures to build natively (e.g., ["amd64", "arm64"]). Input "architectures" not in this list will be cross-compiled with the first entry in this list.'
+        type: string
+        default: '["amd64", "arm64"]'
 
 permissions:
   contents: write
@@ -76,15 +80,23 @@ jobs:
             const parseImage = require('docker-parse-image');
 
             // Parse inputs
-            const images = JSON.parse('${{ inputs.images }}');
+            const natives = JSON.parse('${{ inputs.natives }}');
             const arches = JSON.parse('${{ inputs.architectures }}');
+            const images = JSON.parse('${{ inputs.images }}');
 
             // Define mapping of architectures to their native GitHub runners
-            // If an architecture is not in this map, it will be cross-compiled on amd64
             const NATIVE_RUNNERS = {
               'amd64': 'ubuntu-24.04',
               'arm64': 'ubuntu-24.04-arm'
             };
+
+            // If an architecture is not in natives, it will be cross-compiled with the first entry in natives list
+            const ARCH_RUNNER = {};
+            for (const arch of arches) {
+              ARCH_RUNNER[arch] = (NATIVE_RUNNERS[arch] && natives.includes(arch))
+                ? NATIVE_RUNNERS[arch]
+                : NATIVE_RUNNERS[natives[0]];
+            }
 
             // Get image digest using Docker Registry API
             async function getImageDigest(image) {
@@ -138,7 +150,7 @@ jobs:
             // Normalize architectures with runner info
             const normalizedArches = arches.map(arch => ({
               arch,
-              runner: NATIVE_RUNNERS[arch] || 'ubuntu-24.04'
+              runner: ARCH_RUNNER[arch]
             }));
 
             // Check if there are architecture-dependent packages

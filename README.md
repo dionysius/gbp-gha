@@ -11,7 +11,7 @@ Builds Debian packages on specified distributions and architectures using native
 #### Build Features
 
 - **Multi-distribution support**: Build on Debian, Ubuntu, or any Debian-based distro
-- **Multi-architecture support**: Native builds on amd64 and arm64 using GitHub's runners, cross-compilation for other architectures (e.g., riscv64)
+- **Multi-architecture support**: Native builds on amd64 and arm64 using GitHub's runners (configurable), cross-compilation for other architectures (e.g., riscv64)
 - **Configurable matrix**: Callers can specify custom combinations of images and architectures
 - **GPG signing**: Automatically signs packages with provided GPG key
 - **Artifact upload**: Uploads built packages as workflow artifacts
@@ -40,8 +40,10 @@ jobs:
   - Default: `["ubuntu:latest", "debian:stable"]`
 - **`architectures`** (optional): JSON array as string of architecture names to build for
   - Default: `["amd64"]`
-  - Native builds: `amd64`, `arm64`
-  - Cross-compilation: `riscv64`, `armhf`, `i386`, and other Debian architectures with available crossbuild-essential packages
+  - Supported: `amd64`, `arm64`, `riscv64`, `armhf`, `i386`, and other Debian architectures with available crossbuild-essential packages
+- **`natives`** (optional): JSON array of architectures to allow to build natively.
+  - Default: `["amd64", "arm64"]`
+  - First item in this list will be used for cross-builds
 
 > Cross-compilation builds automatically configure base DEB environment (`cross` profile and `nocheck` for skipping tests).
 
@@ -67,6 +69,23 @@ jobs:
 ```
 
 This will create 12 build jobs (4 images × 3 architectures).
+
+#### Example: Force Cross-Compilation for arm64
+
+If you have issues with native arm64 builds, force cross-compilation:
+
+```yaml
+jobs:
+  build:
+    uses: dionysius/gbp-gha/.github/workflows/build.yml@main
+    secrets:
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+    with:
+      DEBFULLNAME: "Your Name"
+      DEBEMAIL: "your.email@example.com"
+      architectures: '["amd64", "arm64"]'
+      natives: '["amd64"]'  # Only amd64 native, arm64 will be cross-compiled
+```
 
 ### `release.yml` - Create GitHub Release
 
