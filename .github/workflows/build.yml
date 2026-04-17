@@ -101,7 +101,7 @@ jobs:
             // Get image digest using Docker Registry API
             async function getImageDigest(image) {
               const parsed = parseImage(image);
-              const registry = parsed.registry || 'registry.hub.docker.com';
+              const registry = parsed.registry || 'registry-1.docker.io';
               const repo = parsed.fullname.split(':')[0];
               const tag = parsed.tag || 'latest';
 
