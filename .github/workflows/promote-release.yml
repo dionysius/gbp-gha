@@ -122,7 +122,7 @@ jobs:
 
               // Check if waiting period has passed
               if (daysElapsed >= inDays) {
-                console.log(`Promoting ${tag} to full release (waited ${daysElapsed} days)`);
+                console.log(`Promoting ${tag} to full release (${daysElapsed} days elapsed)`);
 
                 // Use 'legacy' to let GitHub determine if this should be latest
                 await github.rest.repos.updateRelease({
