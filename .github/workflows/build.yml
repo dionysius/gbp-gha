@@ -11,6 +11,10 @@ name: git-buildpackage
 
 on:
   workflow_call:
+    outputs:
+      matrix:
+        description: 'Computed build matrix as JSON'
+        value: ${{ jobs.prepare-matrix.outputs.matrix }}
     secrets:
       GPG_PRIVATE_KEY:
         # Optional: when absent the build is produced unsigned
