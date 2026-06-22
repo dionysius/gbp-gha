@@ -13,7 +13,8 @@ on:
   workflow_call:
     secrets:
       GPG_PRIVATE_KEY:
-        required: true
+        # Optional: when absent the build is produced unsigned
+        required: false
     inputs:
       DEBFULLNAME:
         description: 'Full name for Debian package maintainer (used in changelog entries).'
@@ -231,14 +232,26 @@ jobs:
         shell: bash
         env:
           ARCH: ${{ matrix.arch }}
+          DISTRO: ${{ matrix.distro }}
+          CAN_SIGN: ${{ secrets.GPG_PRIVATE_KEY != '' }}
         run: |
+          # Signed when a GPG key is present, otherwise build unsigned and mark the artifact names as UNSIGNED
+          echo "can_sign=${CAN_SIGN}" >> "$GITHUB_OUTPUT"
+          if [ "${CAN_SIGN}" = "true" ]; then
+            echo "sign_opts=" >> "$GITHUB_OUTPUT"
+            echo "artifact_suffix=" >> "$GITHUB_OUTPUT"
+          else
+            echo "sign_opts=-us -uc" >> "$GITHUB_OUTPUT"
+            echo "artifact_suffix=_UNSIGNED" >> "$GITHUB_OUTPUT"
+          fi
+
           CROSSBUILD_PKG="crossbuild-essential-${ARCH}"
 
           # Check if this architecture is supported for cross-compilation in this distro
           if [ "$(dpkg --print-architecture)" != "$ARCH" ]; then
             if [ -z "$(apt-cache madison $CROSSBUILD_PKG 2>/dev/null)" ]; then
-              echo "::warning::Build skipped - $CROSSBUILD_PKG not available in ${{ matrix.distro }}"
-              echo "Build skipped - $CROSSBUILD_PKG not available in ${{ matrix.distro }}" >> $GITHUB_STEP_SUMMARY
+              echo "::warning::Build skipped - $CROSSBUILD_PKG not available in ${DISTRO}"
+              echo "Build skipped - $CROSSBUILD_PKG not available in ${DISTRO}" >> $GITHUB_STEP_SUMMARY
               echo "skip=true" >> $GITHUB_OUTPUT
               exit 0
             fi
@@ -284,15 +297,23 @@ jobs:
             apt-get update
             apt-get install -y $CROSSBUILD_PKG
           fi
+      - name: import gpg key
+        if: steps.install.outputs.skip != 'true' && steps.install.outputs.can_sign == 'true'
+        # https://github.com/actions/runner/issues/1533
+        shell: bash
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          echo "${GPG_PRIVATE_KEY}" | gpg --import
       - name: build deb
         if: steps.install.outputs.skip != 'true'
         # https://github.com/actions/runner/issues/1533
         shell: bash
         env:
           ARCH: ${{ matrix.arch }}
+          IS_PRIMARY: ${{ matrix.is_primary }}
+          SIGN_OPTS: ${{ steps.install.outputs.sign_opts }}
         run: |
-          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --import
-
           . /etc/os-release
 
           # Set cross-compilation environment for cross-builds
@@ -315,10 +336,10 @@ jobs:
           git commit -m "Update changelog for $(dpkg-parsechangelog --show-field Version) release"
 
           # Primary architecture: full build (source + all binaries), secondaries: binary-arch only (no _all packages)
-          if [ "${{ matrix.is_primary }}" = "true" ]; then
-            gbp buildpackage -F "-a${ARCH}" --git-export-dir=.. --git-ignore-branch
+          if [ "${IS_PRIMARY}" = "true" ]; then
+            gbp buildpackage ${SIGN_OPTS} -F "-a${ARCH}" --git-export-dir=.. --git-ignore-branch
           else
-            gbp buildpackage -B "-a${ARCH}" --git-export-dir=.. --git-ignore-branch
+            gbp buildpackage ${SIGN_OPTS} -B "-a${ARCH}" --git-export-dir=.. --git-ignore-branch
           fi
 
           popd
@@ -326,7 +347,7 @@ jobs:
         if: steps.install.outputs.skip != 'true'
         uses: actions/upload-artifact@v6
         with:
-          name: results_${{ matrix.distro }}_${{ matrix.arch }}
+          name: results_${{ matrix.distro }}_${{ matrix.arch }}${{ steps.install.outputs.artifact_suffix }}
           retention-days: 1
           path: |
             *.buildinfo
