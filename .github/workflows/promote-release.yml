@@ -29,11 +29,14 @@ jobs:
 
     steps:
       - name: Promote releases
-        uses: actions/github-script@v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          IN_DAYS: ${{ inputs.in_days }}
+          RELEASE_PATTERN: ${{ inputs.release_pattern }}
         with:
           script: |
-            const inDays = ${{ inputs.in_days }};
-            const globPattern = '${{ inputs.release_pattern }}';
+            const inDays = Number(process.env.IN_DAYS);
+            const globPattern = process.env.RELEASE_PATTERN;
             const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
             // Convert glob pattern with capture group to regex

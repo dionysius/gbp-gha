@@ -1,0 +1,6 @@
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        "dionysius/*": ref-pin
+        "*": hash-pin

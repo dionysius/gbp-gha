@@ -71,19 +71,25 @@ jobs:
       matrix: ${{ steps.generate-matrix.outputs.matrix }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Generate matrix
-        uses: actions/github-script@v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         id: generate-matrix
+        env:
+          NATIVES: ${{ inputs.natives }}
+          ARCHITECTURES: ${{ inputs.architectures }}
+          IMAGES: ${{ inputs.images }}
         with:
           script: |
             const fs = require('fs');
 
             // Parse inputs
-            const natives = JSON.parse('${{ inputs.natives }}');
-            const arches = JSON.parse('${{ inputs.architectures }}');
-            const images = JSON.parse('${{ inputs.images }}');
+            const natives = JSON.parse(process.env.NATIVES);
+            const arches = JSON.parse(process.env.ARCHITECTURES);
+            const images = JSON.parse(process.env.IMAGES);
 
             // Define mapping of architectures to their native GitHub runners
             const NATIVE_RUNNERS = {
@@ -245,10 +251,11 @@ jobs:
 
     steps:
       - name: check out
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           path: source
+          persist-credentials: false
       - name: setup incus
         uses: dionysius/incus-zabbly-actions/setup@v1
       - name: launch ${{ matrix.image }}
@@ -351,6 +358,7 @@ jobs:
           ARCH: ${{ matrix.arch }}
           IS_PRIMARY: ${{ matrix.is_primary }}
           SIGN_OPTS: ${{ steps.signing.outputs.sign_opts }}
+          BEFORE_BUILD_DEPS_INSTALL: ${{ inputs.before_build_deps_install }}
         with:
           instance: ${{ steps.launch.outputs.name }}
           run: |
@@ -362,7 +370,7 @@ jobs:
               export DEB_BUILD_PROFILES="${DEB_BUILD_PROFILES:+${DEB_BUILD_PROFILES} }cross nocheck"
             fi
 
-            ${{ inputs.before_build_deps_install }}
+            eval "${BEFORE_BUILD_DEPS_INSTALL}"
 
             # Install build dependencies
             mk-build-deps -i -r source/debian/control --host-arch $ARCH -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
@@ -385,7 +393,7 @@ jobs:
             popd
       - name: upload artifacts
         if: env.SKIP_BUILD != 'true'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: results_${{ matrix.distro }}_${{ matrix.arch }}${{ steps.signing.outputs.artifact_suffix }}
           retention-days: 1
