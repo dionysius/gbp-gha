@@ -1,12 +1,13 @@
 # Builds Debian packages using git-buildpackage across a matrix of distro images and
 # architectures. The build matrix is generated dynamically: images are deduplicated by
-# digest, and architectures with with matching natives build natively on their runner while
-# others are cross-compiled.
+# the release they resolve to, and architectures with matching natives build natively on
+# their runner while others are cross-compiled.
 #
 # The primary architecture produces a full source + binary build; secondary architectures
-# produce binary-arch only builds. Each build runs inside the target distro container,
-# installs build dependencies, bumps the changelog with a distro suffix, and uploads the
-# resulting Debian build artefacts under results_<distro>_<arch> for use by release.yml.
+# produce binary-arch only builds. Each build runs inside an Incus system container of the
+# target distro, installs build dependencies, bumps the changelog with a distro suffix, and
+# uploads the resulting Debian build artefacts under results_<distro>_<arch> for use by
+# release.yml.
 name: git-buildpackage
 
 on:
@@ -40,9 +41,9 @@ on:
         type: string
         default: ''
       images:
-        description: 'JSON array of distro container images to build for (e.g. ["ubuntu:latest", "debian:stable"]). A pseudo-tag "ubuntu:oldlts" can be used to resolve to the previous lts.'
+        description: 'JSON array of Incus images to build for (e.g. ["images:ubuntu/noble", "images:debian/trixie"]). Pseudo-aliases resolved via endoflife.date: images:ubuntu/lts (newest LTS), images:ubuntu/oldlts (previous LTS), images:ubuntu/rolling (newest release), images:debian/stable, images:debian/oldstable, each optionally with a variant suffix (e.g. images:ubuntu/lts/default). images: entries without a variant use the cloud variant; only cloud variants are waited on until network is up.'
         type: string
-        default: '["ubuntu:latest", "debian:stable"]'
+        default: '["images:ubuntu/lts", "images:debian/stable"]'
       architectures:
         description: 'JSON array of Debian architectures to build for (e.g., ["amd64", "arm64", "riscv64"]).'
         type: string
@@ -72,17 +73,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Install dependencies
-        run: npm install dockside
-
       - name: Generate matrix
         uses: actions/github-script@v8
         id: generate-matrix
         with:
           script: |
             const fs = require('fs');
-            const { Client } = require('dockside');
-            const registryClient = new Client();
 
             // Parse inputs
             const natives = JSON.parse('${{ inputs.natives }}');
@@ -103,48 +99,90 @@ jobs:
                 : NATIVE_RUNNERS[natives[0]];
             }
 
-            // Get image digest using Docker Registry API
-            async function getImageDigest(image) {
-              return registryClient.getDigest(image);
+            async function fetchJson(url) {
+              const res = await fetch(url);
+              if (!res.ok) {
+                throw new Error(`${url}: HTTP ${res.status}`);
+              }
+              return res.json();
             }
 
-            // Resolve ubuntu:oldlts to the previous Ubuntu LTS version tag via Docker Hub.
-            async function resolveUbuntuOldLts() {
-              const latestDigest = await getImageDigest('ubuntu:latest');
-              const currentYear = new Date().getFullYear() % 100;
-              const startYear = currentYear % 2 === 0 ? currentYear : currentYear - 1;
-              for (let year = startYear; year >= 14; year -= 2) {
-                const tag = `${year}.04`;
-                let digest;
-                try {
-                  digest = await getImageDigest(`ubuntu:${tag}`);
-                } catch (e) {
-                  continue; // tag may not exist yet (e.g. upcoming release)
-                }
-                if (digest === latestDigest) {
-                  const oldTag = `${year - 2}.04`;
-                  core.info(`Resolved ubuntu:oldlts to ubuntu:${oldTag} (current LTS: ubuntu:${tag})`);
-                  return `ubuntu:${oldTag}`;
+            // Pseudo-aliases on the images: remote: endoflife.date product and a picker over its released releases, newest first
+            const PSEUDO_ALIASES = {
+              'images:ubuntu/lts':       ['ubuntu', releases => releases.filter(r => r.isLts)[0]],
+              'images:ubuntu/oldlts':    ['ubuntu', releases => releases.filter(r => r.isLts)[1]],
+              'images:ubuntu/rolling':   ['ubuntu', releases => releases[0]],
+              'images:debian/stable':    ['debian', releases => releases[0]],
+              'images:debian/oldstable': ['debian', releases => releases[1]]
+            };
+
+            const releasesByProduct = {};
+            function getReleases(product) {
+              const today = new Date().toISOString().slice(0, 10);
+              releasesByProduct[product] ??= fetchJson(`https://endoflife.date/api/v1/products/${product}`)
+                .then(data => data.result.releases
+                  .filter(r => r.releaseDate <= today)
+                  .sort((a, b) => b.releaseDate.localeCompare(a.releaseDate)));
+              return releasesByProduct[product];
+            }
+
+            // Resolve a pseudo-alias with optional variant to its codename image, e.g. images:ubuntu/oldlts/cloud -> images:ubuntu/noble/cloud
+            async function resolveImage(image) {
+              const alias = Object.keys(PSEUDO_ALIASES).find(a => image === a || image.startsWith(`${a}/`));
+              if (!alias) {
+                return image;
+              }
+              const [product, pick] = PSEUDO_ALIASES[alias];
+              const release = pick(await getReleases(product));
+              if (!release) {
+                throw new Error(`Could not resolve ${alias} via endoflife.date`);
+              }
+              const variant = image.slice(alias.length);
+              const resolved = `images:${product}/${release.codename.split(' ')[0].toLowerCase()}${variant}`;
+              core.info(`Resolved ${image} to ${resolved} (${release.label})`);
+              return resolved;
+            }
+
+            const resolvedImages = await Promise.all(images.map(resolveImage));
+
+            // Identify images on the "images:" remote by distro release (os:release), so aliases and variants of one release dedupe
+            const IMAGES_REMOTE = 'images:';
+            const releaseByAlias = {};
+            if (resolvedImages.some(img => img.startsWith(IMAGES_REMOTE))) {
+              const index = await fetchJson('https://images.linuxcontainers.org/streams/v1/images.json');
+              for (const [key, product] of Object.entries(index.products)) {
+                const [os, release] = key.split(':');
+                for (const alias of product.aliases.split(',')) {
+                  releaseByAlias[alias] = `${os}:${release}`;
                 }
               }
-              throw new Error('Could not determine previous Ubuntu LTS from Docker Hub tags');
+            }
+            function imageIdentity(image) {
+              if (!image.startsWith(IMAGES_REMOTE)) {
+                return image;
+              }
+              const identity = releaseByAlias[image.slice(IMAGES_REMOTE.length)];
+              if (!identity) {
+                throw new Error(`Image ${image} not found on https://images.linuxcontainers.org`);
+              }
+              return identity;
             }
 
-            // pseudo-tag to real image tag map
-            const imageOverrides = {};
-            await Promise.all(
-              images.map(async img => {
-                if (img === 'ubuntu:oldlts') {
-                  imageOverrides[img] = await resolveUbuntuOldLts();
-                }
-              })
-            );
+            // "images:" entries without a variant launch the cloud variant; only cloud images can be waited on until cloud-init (and network) is done
+            function withDefaultVariant(image) {
+              return image.startsWith(IMAGES_REMOTE) && image.split('/').length === 2 ? `${image}/cloud` : image;
+            }
 
-            // Normalize images to objects with image and distro keys.
-            const normalizedImages = images.map(img => ({
-              image: imageOverrides[img] || img,
-              distro: img.replace(/[:/]/g, '-')
-            }));
+            // Normalize images to objects with image, distro, identity and wait keys
+            const normalizedImages = images.map((img, idx) => {
+              const image = withDefaultVariant(resolvedImages[idx]);
+              return {
+                image,
+                distro: img.replace(/^[^:\/]*:/, '').replace(/\//g, '-'),
+                identity: imageIdentity(image),
+                wait: image.endsWith('/cloud') ? 'cloud-init' : 'exec'
+              };
+            });
 
             // Normalize architectures with runner info
             const normalizedArches = arches.map(arch => ({
@@ -157,20 +195,12 @@ jobs:
             const controlFile = fs.readFileSync('debian/control', 'utf8');
             const hasArchPackages = /^Architecture:\s*(?!all\s*$)\S+/m.test(controlFile);
 
-            // Get digests for all images in parallel
-            const imagesWithDigests = await Promise.all(
-              normalizedImages.map(async (img) => ({
-                ...img,
-                digest: await getImageDigest(img.image)
-              }))
-            );
-
-            // Deduplicate images by digest
+            // Deduplicate images by identity
             const uniqueImages = Array.from(
-              imagesWithDigests
+              normalizedImages
                 .reduce((map, img) => {
-                  if (!map.has(img.digest)) {
-                    map.set(img.digest, img);
+                  if (!map.has(img.identity)) {
+                    map.set(img.identity, img);
                   }
                   return map;
                 }, new Map())
@@ -178,11 +208,12 @@ jobs:
             );
 
             // Expand images with architectures
-            const matrix = uniqueImages.flatMap(img => 
-              hasArchPackages 
+            const matrix = uniqueImages.flatMap(img =>
+              hasArchPackages
                 ? normalizedArches.map((arch, idx) => ({
                     image: img.image,
                     distro: img.distro,
+                    wait: img.wait,
                     arch: arch.arch,
                     runner: arch.runner,
                     is_primary: idx === 0
@@ -190,6 +221,7 @@ jobs:
                 : [{
                     image: img.image,
                     distro: img.distro,
+                    wait: img.wait,
                     arch: normalizedArches[0].arch,
                     runner: normalizedArches[0].runner,
                     is_primary: true
@@ -208,35 +240,26 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
 
-    container:
-      image: ${{ matrix.image }}
-      env:
-        DEBIAN_FRONTEND: noninteractive
+    env:
+      DEBIAN_FRONTEND: noninteractive
 
     steps:
-      # because job is in container
-      - name: latest git from backports
-        # https://github.com/actions/runner/issues/1533
-        shell: bash
-        run: |
-          # https://github.com/actions/runner-images/issues/675
-          echo 'Acquire::Retries "3";' | tee /etc/apt/apt.conf.d/99ci
-
-          # install git
-          apt-get update
-          apt-get install -y git
       - name: check out
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           path: source
-      - name: install
-        id: install
-        # https://github.com/actions/runner/issues/1533
-        shell: bash
+      - name: setup incus
+        uses: dionysius/incus-zabbly-actions/setup@v1
+      - name: launch ${{ matrix.image }}
+        id: launch
+        uses: dionysius/incus-zabbly-actions/launch@v1
+        with:
+          image: ${{ matrix.image }}
+          wait: ${{ matrix.wait }}
+      - name: signing
+        id: signing
         env:
-          ARCH: ${{ matrix.arch }}
-          DISTRO: ${{ matrix.distro }}
           CAN_SIGN: ${{ secrets.GPG_PRIVATE_KEY != '' }}
         run: |
           # Signed when a GPG key is present, otherwise build unsigned and mark the artifact names as UNSIGNED
@@ -248,110 +271,123 @@ jobs:
             echo "sign_opts=-us -uc" >> "$GITHUB_OUTPUT"
             echo "artifact_suffix=_UNSIGNED" >> "$GITHUB_OUTPUT"
           fi
-
-          CROSSBUILD_PKG="crossbuild-essential-${ARCH}"
-
-          # Check if this architecture is supported for cross-compilation in this distro
-          if [ "$(dpkg --print-architecture)" != "$ARCH" ]; then
-            if [ -z "$(apt-cache madison $CROSSBUILD_PKG 2>/dev/null)" ]; then
-              echo "::warning::Build skipped - $CROSSBUILD_PKG not available in ${DISTRO}"
-              echo "Build skipped - $CROSSBUILD_PKG not available in ${DISTRO}" >> $GITHUB_STEP_SUMMARY
-              echo "skip=true" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-          fi
-
-          git config --global user.name "${DEBFULLNAME}"
-          git config --global user.email "${DEBEMAIL}"
-
-          apt-get install -y debhelper-compat git-buildpackage equivs
-
-          if [ "$(dpkg --print-architecture)" != "$ARCH" ]; then
-            dpkg --add-architecture $ARCH
-
-            # On Ubuntu, add ports repository for non-x86 architectures
-            . /etc/os-release
-            if [ "$ID" = "ubuntu" ] && [ "$ARCH" != "amd64" ] && [ "$ARCH" != "i386" ]; then
-              NATIVE_ARCH=$(dpkg --print-architecture)
-              # Restrict existing sources to native architecture only
-              # Handle both old sources.list format and new DEB822 .sources format
-              if [ -f /etc/apt/sources.list ]; then
-                sed -i "s/^deb /deb [arch=${NATIVE_ARCH}] /" /etc/apt/sources.list
-              fi
-              for sourcefile in /etc/apt/sources.list.d/*.sources; do
-                [ -f "$sourcefile" ] || continue
-                # Add Architectures field if not present, otherwise update it
-                if grep -q "^Architectures:" "$sourcefile"; then
-                  sed -i "s/^Architectures:.*/Architectures: ${NATIVE_ARCH}/" "$sourcefile"
-                else
-                  sed -i "/^Types:/a Architectures: ${NATIVE_ARCH}" "$sourcefile"
-                fi
-              done
-
-              # Add ports repository for the target architecture
-              cat > /etc/apt/sources.list.d/ports.sources <<EOF
-          Types: deb
-          URIs: http://ports.ubuntu.com/ubuntu-ports
-          Suites: ${VERSION_CODENAME} ${VERSION_CODENAME}-updates ${VERSION_CODENAME}-security
-          Components: main universe
-          Architectures: ${ARCH}
-          EOF
-            fi
-
+      - name: install
+        uses: dionysius/incus-zabbly-actions/exec@v1
+        env:
+          ARCH: ${{ matrix.arch }}
+          DISTRO: ${{ matrix.distro }}
+        with:
+          instance: ${{ steps.launch.outputs.name }}
+          run: |
+            # https://github.com/actions/runner-images/issues/675
+            echo 'Acquire::Retries "3";' | tee /etc/apt/apt.conf.d/99ci
             apt-get update
-            apt-get install -y $CROSSBUILD_PKG
-          fi
+
+            CROSSBUILD_PKG="crossbuild-essential-${ARCH}"
+
+            # Check if this architecture is supported for cross-compilation in this distro
+            if [ "$(dpkg --print-architecture)" != "$ARCH" ]; then
+              if [ -z "$(apt-cache madison $CROSSBUILD_PKG 2>/dev/null)" ]; then
+                echo "::warning::Build skipped - $CROSSBUILD_PKG not available in ${DISTRO}"
+                echo "Build skipped - $CROSSBUILD_PKG not available in ${DISTRO}" >> $GITHUB_STEP_SUMMARY
+                echo "SKIP_BUILD=true" >> $GITHUB_ENV
+                exit 0
+              fi
+            fi
+
+            apt-get install -y git debhelper-compat git-buildpackage equivs
+
+            git config --global user.name "${DEBFULLNAME}"
+            git config --global user.email "${DEBEMAIL}"
+
+            if [ "$(dpkg --print-architecture)" != "$ARCH" ]; then
+              dpkg --add-architecture $ARCH
+
+              # On Ubuntu, add ports repository for non-x86 architectures
+              . /etc/os-release
+              if [ "$ID" = "ubuntu" ] && [ "$ARCH" != "amd64" ] && [ "$ARCH" != "i386" ]; then
+                NATIVE_ARCH=$(dpkg --print-architecture)
+                # Restrict existing sources to native architecture only
+                # Handle both old sources.list format and new DEB822 .sources format
+                if [ -f /etc/apt/sources.list ]; then
+                  sed -i "s/^deb /deb [arch=${NATIVE_ARCH}] /" /etc/apt/sources.list
+                fi
+                for sourcefile in /etc/apt/sources.list.d/*.sources; do
+                  [ -f "$sourcefile" ] || continue
+                  # Add Architectures field if not present, otherwise update it
+                  if grep -q "^Architectures:" "$sourcefile"; then
+                    sed -i "s/^Architectures:.*/Architectures: ${NATIVE_ARCH}/" "$sourcefile"
+                  else
+                    sed -i "/^Types:/a Architectures: ${NATIVE_ARCH}" "$sourcefile"
+                  fi
+                done
+
+                # Add ports repository for the target architecture
+                cat > /etc/apt/sources.list.d/ports.sources <<EOF
+            Types: deb
+            URIs: http://ports.ubuntu.com/ubuntu-ports
+            Suites: ${VERSION_CODENAME} ${VERSION_CODENAME}-updates ${VERSION_CODENAME}-security
+            Components: main universe
+            Architectures: ${ARCH}
+            EOF
+              fi
+
+              apt-get update
+              apt-get install -y $CROSSBUILD_PKG
+            fi
       - name: import gpg key
-        if: steps.install.outputs.skip != 'true' && steps.install.outputs.can_sign == 'true'
-        # https://github.com/actions/runner/issues/1533
-        shell: bash
+        if: env.SKIP_BUILD != 'true' && steps.signing.outputs.can_sign == 'true'
+        uses: dionysius/incus-zabbly-actions/exec@v1
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-        run: |
-          echo "${GPG_PRIVATE_KEY}" | gpg --import
+        with:
+          instance: ${{ steps.launch.outputs.name }}
+          run: |
+            echo "${GPG_PRIVATE_KEY}" | gpg --import
       - name: build deb
-        if: steps.install.outputs.skip != 'true'
-        # https://github.com/actions/runner/issues/1533
-        shell: bash
+        if: env.SKIP_BUILD != 'true'
+        uses: dionysius/incus-zabbly-actions/exec@v1
         env:
           ARCH: ${{ matrix.arch }}
           IS_PRIMARY: ${{ matrix.is_primary }}
-          SIGN_OPTS: ${{ steps.install.outputs.sign_opts }}
-        run: |
-          . /etc/os-release
+          SIGN_OPTS: ${{ steps.signing.outputs.sign_opts }}
+        with:
+          instance: ${{ steps.launch.outputs.name }}
+          run: |
+            . /etc/os-release
 
-          # Set cross-compilation environment for cross-builds
-          if [ "$(dpkg --print-architecture)" != "$ARCH" ]; then
-            export DEB_BUILD_OPTIONS="${DEB_BUILD_OPTIONS:+${DEB_BUILD_OPTIONS} }nocheck"
-            export DEB_BUILD_PROFILES="${DEB_BUILD_PROFILES:+${DEB_BUILD_PROFILES} }cross nocheck"
-          fi
+            # Set cross-compilation environment for cross-builds
+            if [ "$(dpkg --print-architecture)" != "$ARCH" ]; then
+              export DEB_BUILD_OPTIONS="${DEB_BUILD_OPTIONS:+${DEB_BUILD_OPTIONS} }nocheck"
+              export DEB_BUILD_PROFILES="${DEB_BUILD_PROFILES:+${DEB_BUILD_PROFILES} }cross nocheck"
+            fi
 
-          ${{ inputs.before_build_deps_install }}
+            ${{ inputs.before_build_deps_install }}
 
-          # Install build dependencies
-          mk-build-deps -i -r source/debian/control --host-arch $ARCH -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
-          rm -f *.deb *.buildinfo *.changes
+            # Install build dependencies
+            mk-build-deps -i -r source/debian/control --host-arch $ARCH -t "apt-get -y -o Debug::pkgProblemResolver=yes --no-install-recommends"
+            rm -f *.deb *.buildinfo *.changes
 
-          pushd source
+            pushd source
 
-          PARENTVERSION=$(dpkg-parsechangelog --show-field Version)
-          dch -b -D "${VERSION_CODENAME}" -v "${PARENTVERSION}~${VERSION_CODENAME}" "Release for ${VERSION_CODENAME}"
-          git add .
-          git commit -m "Update changelog for $(dpkg-parsechangelog --show-field Version) release"
+            PARENTVERSION=$(dpkg-parsechangelog --show-field Version)
+            dch -b -D "${VERSION_CODENAME}" -v "${PARENTVERSION}~${VERSION_CODENAME}" "Release for ${VERSION_CODENAME}"
+            git add .
+            git commit -m "Update changelog for $(dpkg-parsechangelog --show-field Version) release"
 
-          # Primary architecture: full build (source + all binaries), secondaries: binary-arch only (no _all packages)
-          if [ "${IS_PRIMARY}" = "true" ]; then
-            gbp buildpackage ${SIGN_OPTS} -F "-a${ARCH}" --git-export-dir=.. --git-ignore-branch
-          else
-            gbp buildpackage ${SIGN_OPTS} -B "-a${ARCH}" --git-export-dir=.. --git-ignore-branch
-          fi
+            # Primary architecture: full build (source + all binaries), secondaries: binary-arch only (no _all packages)
+            if [ "${IS_PRIMARY}" = "true" ]; then
+              gbp buildpackage ${SIGN_OPTS} -F "-a${ARCH}" --git-export-dir=.. --git-ignore-branch
+            else
+              gbp buildpackage ${SIGN_OPTS} -B "-a${ARCH}" --git-export-dir=.. --git-ignore-branch
+            fi
 
-          popd
+            popd
       - name: upload artifacts
-        if: steps.install.outputs.skip != 'true'
+        if: env.SKIP_BUILD != 'true'
         uses: actions/upload-artifact@v6
         with:
-          name: results_${{ matrix.distro }}_${{ matrix.arch }}${{ steps.install.outputs.artifact_suffix }}
+          name: results_${{ matrix.distro }}_${{ matrix.arch }}${{ steps.signing.outputs.artifact_suffix }}
           retention-days: 1
           path: |
             *.buildinfo

@@ -10,7 +10,7 @@ Builds Debian packages on specified distributions and architectures using native
 
 #### Build Features
 
-- **Multi-distribution support**: Build on Debian, Ubuntu, or any Debian-based distro
+- **Multi-distribution support**: Build on Debian, Ubuntu, or any Debian-based distro, each in an [Incus](https://linuxcontainers.org/incus/) system container (via [incus-zabbly-actions](https://github.com/dionysius/incus-zabbly-actions))
 - **Multi-architecture support**: Native builds on amd64 and arm64 using GitHub's runners (configurable), cross-compilation for other architectures (e.g., riscv64)
 - **Configurable matrix**: Callers can specify custom combinations of images and architectures
 - **GPG signing**: Automatically signs packages with provided GPG key
@@ -36,8 +36,16 @@ jobs:
 - **`before_build_deps_install`** (optional): Shell commands to run before installing build dependencies
 - **`DEB_BUILD_OPTIONS`** (optional): Space-separated list of build options (e.g., `"parallel=4 nostrip"`)
 - **`DEB_BUILD_PROFILES`** (optional): Space-separated list of build profiles (e.g., `"nodoc nocheck"`)
-- **`images`** (optional): JSON array as string of container images to build for
-  - Default: `["ubuntu:latest", "debian:stable"]`
+- **`images`** (optional): JSON array as string of [Incus images](https://images.linuxcontainers.org/) to build in, as `remote:os/release[/variant]` (e.g. `images:debian/trixie`)
+  - Default: `["images:ubuntu/lts", "images:debian/stable"]`
+  - Pseudo-aliases on the `images:` remote, resolved to the current release via [endoflife.date](https://endoflife.date/), each optionally followed by a variant:
+    - `images:ubuntu/lts`: newest Ubuntu LTS
+    - `images:ubuntu/oldlts`: previous Ubuntu LTS
+    - `images:ubuntu/rolling`: newest Ubuntu release
+    - `images:debian/stable`: newest Debian release
+    - `images:debian/oldstable`: previous Debian release
+  - `images:` entries without a variant use the `cloud` variant, whose launch waits until cloud-init (and with it the network) is ready. Any other variant (e.g. `images:ubuntu/lts/default`) or remote only waits until `incus exec` works.
+  - Entries resolving to the same distro release are built once, as the first of them (e.g. `["images:ubuntu/lts", "images:ubuntu/rolling"]` builds only `ubuntu-lts` while the newest release is an LTS)
 - **`architectures`** (optional): JSON array as string of architecture names to build for
   - Default: `["amd64"]`
   - Supported: `amd64`, `arm64`, `riscv64`, `armhf`, `i386`, and other Debian architectures with available crossbuild-essential packages
@@ -49,7 +57,7 @@ jobs:
 
 #### Build Secrets
 
-- **`GPG_PRIVATE_KEY`** (required): GPG private key for signing packages
+- **`GPG_PRIVATE_KEY`** (optional): GPG private key for signing packages; without it packages are built unsigned
 
 #### Example: Custom Matrix
 
@@ -64,11 +72,11 @@ jobs:
     with:
       DEBFULLNAME: "Your Name"
       DEBEMAIL: "your.email@example.com"
-      images: '["ubuntu:latest", "debian:stable", "debian:oldstable"]'
+      images: '["images:ubuntu/lts", "images:debian/stable", "images:debian/oldstable"]'
       architectures: '["amd64", "arm64", "riscv64"]'
 ```
 
-This will create 12 build jobs (4 images × 3 architectures).
+This will create 9 build jobs (3 images × 3 architectures).
 
 #### Example: Force Cross-Compilation for arm64
 
@@ -247,7 +255,7 @@ jobs:
     with:
       DEBFULLNAME: "Your Name"
       DEBEMAIL: "your.email@example.com"
-      images: '["ubuntu:latest", "debian:stable", "debian:oldstable"]'
+      images: '["images:ubuntu/lts", "images:debian/stable", "images:debian/oldstable"]'
       architectures: '["amd64", "arm64", "riscv64"]'
 
   release:
@@ -267,7 +275,7 @@ jobs:
 
 ## Notes
 
-- Artifacts are named as `results_{distro}_{arch}` (e.g., `results_ubuntu-latest_amd64`)
-- Distro names use dashes within the name (e.g., `ubuntu-latest`, `debian-stable`)
+- Artifacts are named as `results_{distro}_{arch}` (e.g., `results_ubuntu-lts_amd64`), with an `_UNSIGNED` suffix for unsigned builds
+- Distro names are the image as requested, without remote and with dashes (e.g., `images:ubuntu/lts` → `ubuntu-lts`)
 - **Build strategy per distribution**: The first architecture is primary and builds everything (source + arch-dependent + arch-independent packages). Other architectures build only arch-dependent packages.
 - The release workflow automatically handles multiple artifacts from different architectures
